@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FunnelDefinition",
+  "description": "Funnel where timeframe acts as a global date filter and each step narrows down the audience based on conditions.",
+  "type": "object",
+  "$comment": "Semantic rule: timeframe is applied first as a global filter, then steps are applied sequentially.",
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural language user query that describes the overall funnel."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "title": "FunnelStep",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable label for this step of the funnel."
+          },
+          "conditions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "title": "Condition",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "oneOf": []
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Expected value for the selected field."
+                },
+                "operator": {
+                  "type": "string",
+                  "oneOf": [
+                    { "const": "equals", "description": "Field must be exactly equal to the value (string equality)." },
+                    { "const": "not_equals", "description": "Field must be different from the value (string inequality)." },
+                    { "const": "like", "description": "Field must match the value using a partial or pattern-based match." },
+                    { "const": "in", "description": "Field must be contained in a predefined list of values." }
+                  ],
+                  "$comment": "Extend this oneOf with a const and description for each new operator."
+                }
+              },
+              "required": ["field", "value", "operator"],
+              "additionalProperties": false,
+              "$comment": "Semantic rule: all conditions within a given step are combined with logical AND.",
+              "allOf": []
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Explanation of what this funnel step is selecting."
+          }
+        },
+        "required": ["name", "conditions", "description"],
+        "additionalProperties": false
+      }
+    },
+    "timeframe": {
+      "type": "object",
+      "title": "Timeframe",
+      "description": "Global date window applied to all steps of the funnel.",
+      "properties": {
+        "end": {
+          "type": "string",
+          "format": "date",
+          "description": "End date of the global interval."
+        },
+        "start": {
+          "type": "string",
+          "format": "date",
+          "description": "Start date of the global interval."
+        }
+      },
+      "required": ["end", "start"],
+      "additionalProperties": false,
+      "$comment": "Business rule: timeframe.end must be greater than or equal to timeframe.start. This rule is enforced by the application or validation engine."
+    }
+  },
+  "required": ["prompt", "steps", "timeframe"],
+  "additionalProperties": false
+}

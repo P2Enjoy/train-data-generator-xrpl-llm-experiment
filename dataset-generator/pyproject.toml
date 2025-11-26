@@ -1,0 +1,19 @@
+[project]
+name = "dataset-generator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flash-attn",
+    "jsonschema",
+    "torch",
+    "torchaudio",
+    "triton",
+]
+
+[tool.uv.sources]
+triton = { path = "../../mllib/triton/dist/triton-3.5.1+git0add6826-cp312-cp312-linux_aarch64.whl" }
+torch = { path = "../../mllib/pytorch/dist/torch-2.9.1a0+gitd38164a-cp312-cp312-linux_aarch64.whl" }
+flash-attn = { path = "../../mllib/pytorch/third_party/flash-attention/dist/flash_attn-2.7.4-cp312-cp312-linux_aarch64.whl" }
+torchaudio = { path = "../../mllib/audio/dist/torchaudio-2.9.1+a224ab2-cp312-cp312-linux_aarch64.whl" }
