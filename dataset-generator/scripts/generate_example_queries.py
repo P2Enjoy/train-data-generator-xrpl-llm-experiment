@@ -11,8 +11,10 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from model_config import default_model
 
-OLLAMA_MODEL = "gpt-oss:120b"
+
+OLLAMA_MODEL = default_model()
 
 
 def parse_args() -> argparse.Namespace:

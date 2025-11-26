@@ -378,7 +378,6 @@ Notes:
 - `runAll.sh` wraps the entire pipeline, calls `uv sync`, and uses `uv run python …` so you never have to spell the `uv` invocations yourself. It skips steps whose outputs already exist and always continues with downstream stages.
 - `runAll.sh` also retries a step automatically if its output logs contain `[warn]`, so intermittent Ollama glitches will trigger a second attempt before failing.
 - `reset.sh` removes `outputs/` so you can start fresh before running `./runAll.sh` (it recreates everything).
-- The default Ollama model is stored in `.llmrc` (set to `gpt-oss:120b`). `runAll.sh` reads this file, but you can pass `--model <name>` or set `LLM_MODEL` in the environment when you need a different model.
 - `data/base_schema_template.json` mirrors the FunnelDefinition shape (prompt, steps with named conditions using `operator` and `value`, timeframe with start/end dates). `build_schemas.py` injects field `oneOf` entries and per-field `allOf` enum constraints produced by the LLM.
 - `generate_domain_specs.py` and `generate_example_queries.py` call Ollama by default; pass `--offline-fallback` to use deterministic stubs if the model is unavailable. Ensure `ollama run gpt-oss:120b` works locally before running the pipeline.
 - Default inputs live under `data/`; numbered outputs go to `outputs/d_0*_*.jsonl`. Validation is performed during dataset creation to label valid vs. invalid rows.
@@ -396,16 +395,3 @@ uv run python scripts/test_teacher.py --training-corpus outputs/d_05_training_co
 ```
 
 Inspect the printed diffs to verify the teacher model can still produce schema-compliant ASTs before progressing to student fine-tuning.
-
-## Interactive teacher inference
-
-`test_inference_teacher.py` lets you try a new prompt for any schema. It loads `outputs/d_02_final_schemas.jsonl`, builds the canonical `[SCHEMA]`/`[QUERY]` prompt, calls `gpt-oss:120b`, and prints both the raw model reply and the parsed JSON AST.
-
-```bash
-uv run python scripts/test_inference_teacher.py \
-  --schema-id events_funnel_v1 \
-  --prompt "All events attended by Guillaume last year" \
-  --model gpt-oss:120b
-```
-
-Use this script to sanity-check a single NL request before adding it to your dataset or training loops.

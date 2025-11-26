@@ -10,8 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from model_config import default_model
 
-DEFAULT_MODEL = "gpt-oss:120b"
+DEFAULT_MODEL = default_model()
 
 
 def parse_args() -> argparse.Namespace:

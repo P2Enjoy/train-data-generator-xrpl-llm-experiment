@@ -1,3 +1,10 @@
 {"domain": "events", "description": "Community, customer, and internal events."}
 {"domain": "work", "description": "Work tasks, projects, and productivity."}
 {"domain": "cooking", "description": "Cooking recipes and meals at home."}
+{"domain": "travel", "description": "Travel planning, destinations, and experiences."}
+{"domain": "fitness", "description": "Exercise routines, health, and wellness."}
+{"domain": "education", "description": "Learning, courses, and academic subjects."}
+{"domain": "finance", "description": "Personal finance, budgeting, and investments."}
+{"domain": "entertainment", "description": "Movies, music, games, and leisure activities."}
+{"domain": "technology", "description": "Tech news, gadgets, and software development."}
+{"domain": "healthcare", "description": "Medical information, health tips, and wellness advice."}

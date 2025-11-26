@@ -4,6 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+MODEL_DEFAULT="gpt-oss:120b"
+if [ -f .llmrc ]; then
+  MODEL_DEFAULT="$(<.llmrc)"
+fi
+MODEL="${LLM_MODEL:-$MODEL_DEFAULT}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      shift
+      MODEL="$1"
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--model MODEL]"
+      exit 1
+      ;;
+  esac
+done
+
 mkdir -p outputs
 
 echo "Installing / syncing dependencies with uv..."
@@ -44,7 +64,7 @@ run_step \
   scripts/generate_domain_specs.py \
     --prompts data/domain_prompts.jsonl \
     --out outputs/d_01_domain_specs.jsonl \
-    --model gpt-oss:120b
+    --model "${MODEL}"
 
 run_step \
   "schema build" \
@@ -61,7 +81,7 @@ run_step \
     --schemas outputs/d_02_final_schemas.jsonl \
     --out outputs/d_03_schema_queries.jsonl \
     --per-schema 6 \
-    --model gpt-oss:120b
+    --model "${MODEL}"
 
 run_step \
   "dataset generation" \
