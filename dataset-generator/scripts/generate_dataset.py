@@ -15,6 +15,7 @@ import _bootstrap  # noqa: F401
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
 
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import canonical_json, load_jsonl, write_jsonl
 
 DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
@@ -33,38 +34,48 @@ OP_PHRASES = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate dataset JSONL.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+    defaults = load_section("dataset_generation", config_args.config)
+
+    parser = argparse.ArgumentParser(description="Generate dataset JSONL.", parents=[config_parser])
     parser.add_argument(
         "--schemas",
         type=Path,
-        default=Path("outputs/d_02_final_schemas.jsonl"),
+        default=Path(defaults.get("final_schemas_out", "outputs/d_02_final_schemas.jsonl")),
         help="JSONL produced by build_schemas.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("outputs/d_04_dataset.jsonl"),
+        default=Path(defaults.get("dataset_out", "outputs/d_04_dataset.jsonl")),
         help="Where to write dataset JSONL.",
     )
     parser.add_argument(
         "--positives-per-schema",
         type=int,
-        default=8,
+        default=int(defaults.get("positives_per_schema", 8)),
         help="How many validated samples per schema.",
     )
     parser.add_argument(
         "--negative-ratio",
         type=float,
-        default=0.4,
+        default=float(defaults.get("negative_ratio", 0.4)),
         help="Negatives to generate per positive (approx).",
     )
     parser.add_argument(
         "--seed",
         type=int,
-        default=11,
+        default=int(defaults.get("seed", 11)),
         help="Seed for deterministic generation.",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:

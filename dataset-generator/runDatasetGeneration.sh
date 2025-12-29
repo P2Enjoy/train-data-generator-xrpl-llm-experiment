@@ -12,14 +12,20 @@ if [ -f .llmrc ]; then
 fi
 MODEL="${LLM_MODEL:-$MODEL_DEFAULT}"
 
+CONFIG_PATH="config/defaults.json"
+
 usage() {
-  echo "Usage: $0 [--model MODEL]"
+  echo "Usage: $0 [--model MODEL] [--config CONFIG_PATH]"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)
       MODEL="$2"
+      shift 2
+      ;;
+    --config)
+      CONFIG_PATH="$2"
       shift 2
       ;;
     -h|--help)
@@ -39,6 +45,32 @@ mkdir -p outputs
 echo "Using UV_CACHE_DIR=${UV_CACHE_DIR}"
 echo "Installing / syncing dependencies with uv..."
 uv sync
+
+eval "$(UV_CACHE_DIR="${UV_CACHE_DIR}" uv run python - <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+defaults = {}
+if config_path.exists():
+    try:
+        defaults = json.loads(config_path.read_text())
+    except Exception:
+        defaults = {}
+
+dg = defaults.get("dataset_generation", {}) or {}
+
+def emit(name: str, fallback: str) -> None:
+    value = dg.get(name, fallback)
+    print(f'{name}="{value}"')
+
+emit("schema_specs_out", "outputs/d_01_domain_specs.jsonl")
+emit("final_schemas_out", "outputs/d_02_final_schemas.jsonl")
+emit("schema_queries_out", "outputs/d_03_schema_queries.jsonl")
+emit("dataset_out", "outputs/d_04_dataset.jsonl")
+emit("training_corpus_out", "outputs/d_05_training_corpus.jsonl")
+PY "$CONFIG_PATH")"
 
 run_step() {
   local name="$1"
@@ -71,54 +103,45 @@ run_step() {
 
 run_step \
   "domain spec synthesis" \
-  "[ -s outputs/d_01_domain_specs.jsonl ]" \
+  "[ -s \"${schema_specs_out}\" ]" \
   scripts/generate_domain_specs.py \
-    --prompts data/domain_prompts.jsonl \
-    --out outputs/d_01_domain_specs.jsonl \
+    --config "${CONFIG_PATH}" \
     --model "${MODEL}"
 
 run_step \
   "schema build" \
-  "[ -s outputs/d_02_final_schemas.jsonl ]" \
+  "[ -s \"${final_schemas_out}\" ]" \
   scripts/build_schemas.py \
-    --domain-specs outputs/d_01_domain_specs.jsonl \
-    --base-template data/base_schema_template.json \
-    --out outputs/d_02_final_schemas.jsonl
+    --config "${CONFIG_PATH}"
 
 run_step \
   "example query generation" \
-  "[ -s outputs/d_03_schema_queries.jsonl ]" \
+  "[ -s \"${schema_queries_out}\" ]" \
   scripts/generate_example_queries.py \
-    --schemas outputs/d_02_final_schemas.jsonl \
-    --out outputs/d_03_schema_queries.jsonl \
-    --per-schema 6 \
+    --config "${CONFIG_PATH}" \
     --model "${MODEL}"
 
 run_step \
   "dataset generation" \
-  "[ -s outputs/d_04_dataset.jsonl ]" \
+  "[ -s \"${dataset_out}\" ]" \
   scripts/generate_dataset.py \
-    --schemas outputs/d_02_final_schemas.jsonl \
-    --out outputs/d_04_dataset.jsonl \
-    --positives-per-schema 8 \
-    --negative-ratio 0.4
+    --config "${CONFIG_PATH}"
 
 run_step \
   "training corpus export" \
-  "[ -s outputs/d_05_training_corpus.jsonl ]" \
+  "[ -s \"${training_corpus_out}\" ]" \
   scripts/build_training_corpus.py \
-    --dataset outputs/d_04_dataset.jsonl \
-    --out outputs/d_05_training_corpus.jsonl
+    --config "${CONFIG_PATH}"
 
 PRETTY_DIR="outputs/pretty"
 mkdir -p "$PRETTY_DIR"
 
 pretty_pairs=(
-  "outputs/d_01_domain_specs.jsonl|$PRETTY_DIR/d_01_domain_specs.json"
-  "outputs/d_02_final_schemas.jsonl|$PRETTY_DIR/d_02_final_schemas.json"
-  "outputs/d_03_schema_queries.jsonl|$PRETTY_DIR/d_03_schema_queries.json"
-  "outputs/d_04_dataset.jsonl|$PRETTY_DIR/d_04_dataset.json"
-  "outputs/d_05_training_corpus.jsonl|$PRETTY_DIR/d_05_training_corpus.json"
+  "${schema_specs_out}|$PRETTY_DIR/$(basename "${schema_specs_out%.jsonl}").json"
+  "${final_schemas_out}|$PRETTY_DIR/$(basename "${final_schemas_out%.jsonl}").json"
+  "${schema_queries_out}|$PRETTY_DIR/$(basename "${schema_queries_out%.jsonl}").json"
+  "${dataset_out}|$PRETTY_DIR/$(basename "${dataset_out%.jsonl}").json"
+  "${training_corpus_out}|$PRETTY_DIR/$(basename "${training_corpus_out%.jsonl}").json"
 )
 
 for pair in "${pretty_pairs[@]}"; do

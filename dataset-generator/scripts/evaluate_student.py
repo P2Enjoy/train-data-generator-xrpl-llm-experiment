@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unsloth
 import argparse
 import json
 from pathlib import Path
@@ -40,6 +41,14 @@ and represents the program matching the user request.
 
 
 def parse_args() -> argparse.Namespace:
+    def get_default_teacher_model() -> str | None:
+        rc_path = Path(".llmrc")
+        if rc_path.exists():
+            model = rc_path.read_text(encoding="utf-8").strip()
+            return model or None
+        return None
+
+    default_teacher = get_default_teacher_model()
     parser = argparse.ArgumentParser(description="Evaluate student LoRA adapters on held-out samples.")
     parser.add_argument(
         "--dataset",
@@ -75,8 +84,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--teacher-model",
         type=str,
-        default=None,
-        help="Optional Ollama model to compare against (teacher baseline).",
+        default=default_teacher,
+        help="Ollama model to compare against (teacher baseline). Defaults to model in .llmrc when present.",
+    )
+    parser.add_argument(
+        "--log-every",
+        type=int,
+        default=25,
+        help="Print progress every N samples.",
     )
     return parser.parse_args()
 
@@ -162,14 +177,14 @@ def evaluate_sample(
         result["parse_error"] = str(exc)
         return result
 
-        result["student_canonical"] = canonical_json(parsed)
-        try:
-            target = json.loads(sample["ast_json"])
-            result["target_canonical"] = canonical_json(target)
-            result["exact_match"] = result["student_canonical"] == result["target_canonical"]
-        except json.JSONDecodeError as exc:
-            result["exact_match"] = False
-            result["target_error"] = str(exc)
+    result["student_canonical"] = canonical_json(parsed)
+    try:
+        target = json.loads(sample["ast_json"])
+        result["target_canonical"] = canonical_json(target)
+        result["exact_match"] = result["student_canonical"] == result["target_canonical"]
+    except json.JSONDecodeError as exc:
+        result["exact_match"] = False
+        result["target_error"] = str(exc)
 
     try:
         validator.validate(parsed)
@@ -213,11 +228,17 @@ def main() -> None:
         dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))
     if args.max_samples and len(dataset) > args.max_samples:
         dataset = dataset.select(range(args.max_samples))
+    if not args.teacher_model:
+        print("[eval] teacher disabled (no --teacher-model provided and no .llmrc found)")
+    print(
+        f"[eval] samples={len(dataset)} 4bit={args.load_in_4bit} "
+        f"teacher={args.teacher_model or 'none'} log_every={args.log_every}"
+    )
 
     model, tokenizer = load_student(args.base_model, args.adapter, args.max_seq_length, args.load_in_4bit)
     results: List[Dict[str, Any]] = []
 
-    for sample in dataset:
+    for idx, sample in enumerate(dataset, start=1):
         schema = json.loads(sample["schema_json"])
         validator = Draft7Validator(schema)
         result = evaluate_sample(
@@ -231,6 +252,8 @@ def main() -> None:
             teacher_model=args.teacher_model,
         )
         results.append(result)
+        if args.log_every and idx % args.log_every == 0:
+            print(f"[eval] processed {idx}/{len(dataset)}")
 
     summary = summarize(results)
     args.out_dir.mkdir(parents=True, exist_ok=True)

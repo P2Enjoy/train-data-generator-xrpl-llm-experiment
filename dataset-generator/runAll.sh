@@ -9,6 +9,7 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
 WITH_TRAINING=0
 WITH_EVALS=0
 MODEL_ARG=()
+CONFIG_PATH="config/defaults.json"
 
 usage() {
   cat <<EOF
@@ -28,6 +29,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)
       MODEL_ARG=(--model "$2")
+      shift 2
+      ;;
+    --config)
+      CONFIG_PATH="$2"
       shift 2
       ;;
     --with-training)
@@ -50,10 +55,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-"$ROOT/runDatasetGeneration.sh" "${MODEL_ARG[@]}"
+"$ROOT/runDatasetGeneration.sh" "${MODEL_ARG[@]}" --config "${CONFIG_PATH}"
 
 if [[ $WITH_TRAINING -eq 1 ]]; then
-  "$ROOT/runTraining.sh"
+  "$ROOT/runTraining.sh" --config "${CONFIG_PATH}"
 fi
 
 if [[ $WITH_EVALS -eq 1 ]]; then

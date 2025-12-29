@@ -69,7 +69,9 @@ def plot_training_curves(df: pd.DataFrame, out_dir: Path) -> List[Path]:
         ax.plot(df["step"], df["eval_loss"], label="eval_loss")
     ax.set_xlabel("Step")
     ax.set_ylabel("Loss")
-    ax.legend()
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend()
     loss_path = out_dir / "training_loss.png"
     fig.tight_layout()
     fig.savefig(loss_path, dpi=200)
@@ -93,8 +95,13 @@ def plot_training_curves(df: pd.DataFrame, out_dir: Path) -> List[Path]:
 def plot_eval_histogram(df: pd.DataFrame, out_dir: Path) -> Path | None:
     if df.empty or "schema_valid" not in df:
         return None
+    plot_df = df.copy()
+    if "exact_match" not in plot_df:
+        plot_df["exact_match"] = False
+    else:
+        plot_df["exact_match"] = plot_df["exact_match"].fillna(False)
     fig, ax = plt.subplots(figsize=(6, 4))
-    sns.countplot(data=df, x="schema_valid", hue="exact_match", ax=ax)
+    sns.countplot(data=plot_df, x="schema_valid", hue="exact_match", ax=ax)
     ax.set_xlabel("Schema valid")
     ax.set_ylabel("Count")
     hist_path = out_dir / "eval_outcomes.png"

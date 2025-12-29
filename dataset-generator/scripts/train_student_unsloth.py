@@ -1,5 +1,4 @@
 """Train Gemma 3 270M student adapters with Unsloth on the generated corpus."""
-
 from __future__ import annotations
 
 import argparse
@@ -11,6 +10,7 @@ from typing import Any, Dict, Tuple
 import torch
 from datasets import load_dataset
 from unsloth import FastModel
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 
 
 # Patch Unsloth-generated PEFT forward to avoid missing constants in some builds.
@@ -61,79 +61,120 @@ DEFAULT_OUTPUT_DIR = Path("outputs/student_runs/gemma3-270m")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fine-tune Gemma 3 270M with Unsloth LoRA adapters.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+    defaults = load_section("training", config_args.config)
+    data_defaults = load_section("dataset_generation", config_args.config)
+
+    parser = argparse.ArgumentParser(description="Fine-tune Gemma 3 270M with Unsloth LoRA adapters.", parents=[config_parser])
     parser.add_argument(
         "--training-corpus",
         type=Path,
-        default=Path("outputs/d_05_training_corpus.jsonl"),
+        default=Path(
+            defaults.get(
+                "training_corpus",
+                data_defaults.get("training_corpus_out", "outputs/d_05_training_corpus.jsonl"),
+            )
+        ),
         help="JSONL produced by build_training_corpus.py.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
+        default=Path(defaults.get("output_dir", DEFAULT_OUTPUT_DIR)),
         help="Where to store checkpoints, logs, and final adapters.",
     )
-    parser.add_argument("--base-model", type=str, default=DEFAULT_BASE_MODEL, help="HF model id for Gemma 3 270M.")
-    parser.add_argument("--max-seq-length", type=int, default=2048, help="Maximum sequence length for training.")
-    parser.add_argument("--batch-size", type=int, default=4, help="Per-device batch size.")
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default=str(defaults.get("base_model", DEFAULT_BASE_MODEL)),
+        help="HF model id for Gemma 3 270M.",
+    )
+    parser.add_argument(
+        "--max-seq-length",
+        type=int,
+        default=int(defaults.get("max_seq_length", 2048)),
+        help="Maximum sequence length for training.",
+    )
+    parser.add_argument("--batch-size", type=int, default=int(defaults.get("batch_size", 4)), help="Per-device batch size.")
     parser.add_argument(
         "--grad-accum",
         type=int,
-        default=4,
+        default=int(defaults.get("grad_accum", 4)),
         help="Gradient accumulation steps to reach effective batch size.",
     )
-    parser.add_argument("--learning-rate", type=float, default=5e-5, help="Learning rate for adapter params.")
-    parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay.")
-    parser.add_argument("--warmup-steps", type=int, default=50, help="Linear warmup steps.")
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=float(defaults.get("learning_rate", 5e-5)),
+        help="Learning rate for adapter params.",
+    )
+    parser.add_argument("--weight-decay", type=float, default=float(defaults.get("weight_decay", 0.01)), help="Weight decay.")
+    parser.add_argument("--warmup-steps", type=int, default=int(defaults.get("warmup_steps", 50)), help="Linear warmup steps.")
     parser.add_argument(
         "--num-epochs",
         type=float,
-        default=1.0,
+        default=float(defaults.get("num_epochs", 1.0)),
         help="Number of training epochs if --max-steps is not set.",
     )
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=None,
+        default=defaults.get("max_steps", None),
         help="Optional cap on total training steps (overrides epochs when set).",
     )
-    parser.add_argument("--logging-steps", type=int, default=10, help="Log frequency.")
-    parser.add_argument("--eval-steps", type=int, default=50, help="Eval frequency when a val split exists.")
-    parser.add_argument("--save-steps", type=int, default=200, help="Checkpoint frequency.")
-    parser.add_argument("--save-total-limit", type=int, default=3, help="How many checkpoints to keep.")
-    parser.add_argument("--val-split", type=float, default=0.05, help="Validation split fraction.")
-    parser.add_argument("--max-samples", type=int, default=None, help="Optional cap on total samples.")
-    parser.add_argument("--seed", type=int, default=3407, help="Random seed.")
+    parser.add_argument("--logging-steps", type=int, default=int(defaults.get("logging_steps", 10)), help="Log frequency.")
+    parser.add_argument("--eval-steps", type=int, default=int(defaults.get("eval_steps", 50)), help="Eval frequency when a val split exists.")
+    parser.add_argument("--save-steps", type=int, default=int(defaults.get("save_steps", 200)), help="Checkpoint frequency.")
+    parser.add_argument("--save-total-limit", type=int, default=int(defaults.get("save_total_limit", 3)), help="How many checkpoints to keep.")
+    parser.add_argument("--val-split", type=float, default=float(defaults.get("val_split", 0.05)), help="Validation split fraction.")
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=defaults.get("max_samples", None),
+        help="Optional cap on total samples.",
+    )
+    parser.add_argument("--seed", type=int, default=int(defaults.get("seed", 3407)), help="Random seed.")
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=bool(defaults.get("load_in_4bit", True)),
         help="Enable 4bit quantized training (default: on).",
     )
     parser.add_argument(
         "--bf16",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=bool(defaults.get("bf16", True)),
         help="Enable bf16 training if supported (default: on to match Gemma weights).",
     )
-    parser.add_argument("--use-gradient-checkpointing", action="store_true", help="Turn on gradient checkpointing.")
+    parser.add_argument(
+        "--use-gradient-checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("use_gradient_checkpointing", False)),
+        help="Turn on gradient checkpointing.",
+    )
     parser.add_argument(
         "--resume-from-checkpoint",
         type=Path,
         default=None,
         help="Resume from a previous checkpoint directory.",
     )
-    parser.add_argument("--lora-r", type=int, default=64, help="LoRA rank.")
-    parser.add_argument("--lora-alpha", type=int, default=128, help="LoRA alpha.")
-    parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout.")
+    parser.add_argument("--lora-r", type=int, default=int(defaults.get("lora_r", 64)), help="LoRA rank.")
+    parser.add_argument("--lora-alpha", type=int, default=int(defaults.get("lora_alpha", 128)), help="LoRA alpha.")
+    parser.add_argument("--lora-dropout", type=float, default=float(defaults.get("lora_dropout", 0.05)), help="LoRA dropout.")
     parser.add_argument(
         "--eval-max-samples",
         type=int,
-        default=256,
+        default=int(defaults.get("eval_max_samples", 256)),
         help="Limit validation set to this many samples to keep eval quick.",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def load_corpus(
@@ -246,6 +287,10 @@ def main() -> None:
         args.max_samples,
         args.eval_max_samples,
     )
+    print(
+        f"[data] train samples={len(train_set)}"
+        + (f" eval samples={len(eval_set)}" if eval_set is not None else "")
+    )
 
     training_args = SFTConfig(
         dataset_text_field="text",
@@ -284,6 +329,12 @@ def main() -> None:
         instruction_part="<start_of_turn>user\n",
         response_part="<start_of_turn>model\n",
     )
+    effective_bs = args.batch_size * args.grad_accum
+    print(
+        f"[config] base_model={args.base_model} 4bit={args.load_in_4bit} bf16={args.bf16} "
+        f"lr={args.learning_rate} max_steps={args.max_steps or 'auto'} "
+        f"batch_per_device={args.batch_size} grad_accum={args.grad_accum} effective_bs={effective_bs}"
+    )
 
     metrics_log = args.output_dir / "training_metrics.jsonl"
     trainer.add_callback(JsonlLogger(metrics_log))
@@ -293,6 +344,7 @@ def main() -> None:
     ensure_variant_keys_patch()
 
     trainer_stats = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    print(f"[train] finished steps={trainer.state.global_step} loss={trainer.state.log_history[-1].get('loss') if trainer.state.log_history else 'n/a'}")
 
     final_dir = args.output_dir / "checkpoint-final"
     final_dir.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import _bootstrap  # noqa: F401
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import load_jsonl, write_jsonl
 from lib.llm import run_ollama
 from lib.parsing import extract_json_array
@@ -20,23 +21,33 @@ DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate example NL queries for schemas.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+    defaults = load_section("dataset_generation", config_args.config)
+
+    parser = argparse.ArgumentParser(description="Generate example NL queries for schemas.", parents=[config_parser])
     parser.add_argument(
         "--schemas",
         type=Path,
-        default=Path("outputs/final_schemas.jsonl"),
+        default=Path(defaults.get("final_schemas_out", "outputs/final_schemas.jsonl")),
         help="JSONL produced by build_schemas.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("outputs/schema_queries.jsonl"),
+        default=Path(defaults.get("schema_queries_out", "outputs/schema_queries.jsonl")),
         help="Where to write JSONL queries.",
     )
     parser.add_argument(
         "--per-schema",
         type=int,
-        default=6,
+        default=int(defaults.get("per_schema_queries", 6)),
         help="How many queries to request per schema.",
     )
     parser.add_argument(
@@ -48,12 +59,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--offline-fallback",
         action="store_true",
+        default=bool(defaults.get("offline_fallback", False)),
         help="Skip ollama and generate deterministic stubs.",
     )
     parser.add_argument(
         "--seed",
         type=int,
-        default=19,
+        default=int(defaults.get("seed", 19)),
         help="Seed for fallback generation.",
     )
     parser.add_argument(
@@ -62,7 +74,7 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Retries when Ollama output lacks parseable JSON.",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:

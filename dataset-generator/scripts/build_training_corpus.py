@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import _bootstrap  # noqa: F401
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import load_jsonl, write_jsonl
 
 
@@ -31,22 +32,33 @@ and represents the program matching the user request.
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build training corpus JSONL.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+    defaults = load_section("dataset_generation", config_args.config)
+
+    parser = argparse.ArgumentParser(description="Build training corpus JSONL.", parents=[config_parser])
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("outputs/d_04_dataset.jsonl"),
+        default=Path(defaults.get("dataset_out", "outputs/d_04_dataset.jsonl")),
         help="JSONL produced by generate_dataset.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("outputs/d_05_training_corpus.jsonl"),
+        default=Path(defaults.get("training_corpus_out", "outputs/d_05_training_corpus.jsonl")),
         help="Where to write prompt/response JSONL.",
     )
     parser.add_argument(
         "--include-invalid",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("include_invalid", True)),
         help="Include invalid rows as negatives in the corpus.",
     )
     parser.add_argument(
@@ -55,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional limit on how many samples to export.",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def build_prompt(schema_json: str, query: str, current_date: str | None) -> str:

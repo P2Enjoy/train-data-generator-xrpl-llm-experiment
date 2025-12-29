@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import _bootstrap  # noqa: F401
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import write_jsonl
 from lib.llm import run_ollama
 from lib.parsing import extract_json_object
@@ -21,17 +22,26 @@ OLLAMA_MODEL = default_model()
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate domain specs JSONL.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+    defaults = load_section("dataset_generation", config_args.config)
+    parser = argparse.ArgumentParser(description="Generate domain specs JSONL.", parents=[config_parser])
     parser.add_argument(
         "--prompts",
         type=Path,
-        default=Path("data/domain_prompts.jsonl"),
+        default=Path(defaults.get("prompts_path", "data/domain_prompts.jsonl")),
         help="Path to JSONL domain prompts.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("outputs/domain_specs.jsonl"),
+        default=Path(defaults.get("schema_specs_out", "outputs/d_01_domain_specs.jsonl")),
         help="Where to write JSONL specs.",
     )
     parser.add_argument(
@@ -43,21 +53,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=11,
+        default=int(defaults.get("seed", 11)),
         help="Seed for deterministic fallbacks.",
     )
     parser.add_argument(
         "--examples-per-schema",
         type=int,
-        default=4,
+        default=int(defaults.get("examples_per_schema", 4)),
         help="How many example natural language queries to request from the model.",
     )
     parser.add_argument(
         "--offline-fallback",
         action="store_true",
+        default=bool(defaults.get("offline_fallback", False)),
         help="Skip ollama and use deterministic stubs instead (for testing).",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def load_prompts(path: Path) -> List[Dict[str, Any]]:
