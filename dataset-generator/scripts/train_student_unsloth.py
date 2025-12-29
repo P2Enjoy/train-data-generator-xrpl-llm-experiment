@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import importlib
 from pathlib import Path
@@ -266,6 +267,16 @@ class JsonlLogger(TrainerCallback):
             handle.write(json.dumps(payload) + "\n")
 
 
+class CleanSFTTrainer(SFTTrainer):
+    """Strip collator-only bookkeeping fields before forwarding to the model."""
+
+    def compute_loss(self, model, inputs, return_outputs=False):  # type: ignore[override]
+        if "num_items_in_batch" in inputs:
+            inputs = dict(inputs)
+            inputs.pop("num_items_in_batch", None)
+        return super().compute_loss(model, inputs, return_outputs=return_outputs)
+
+
 def save_run_config(path: Path, args: argparse.Namespace, train_len: int, eval_len: int | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     config = {
@@ -340,6 +351,8 @@ def main() -> None:
         load_in_8bit=False,
         full_finetuning=False,
     )
+    if not hasattr(builtins, "VARIANT_KWARG_KEYS"):
+        builtins.VARIANT_KWARG_KEYS = {"adapter_name"}
     tokenizer = get_chat_template(tokenizer, chat_template="gemma3")
     model = FastModel.get_peft_model(
         model,
@@ -400,7 +413,7 @@ def main() -> None:
         gradient_checkpointing=args.use_gradient_checkpointing,
     )
 
-    trainer = SFTTrainer(
+    trainer = CleanSFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_set,

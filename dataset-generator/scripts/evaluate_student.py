@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unsloth
 import argparse
+import builtins
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -100,6 +101,8 @@ def load_student(
         load_in_8bit=False,
         full_finetuning=False,
     )
+    if not hasattr(builtins, "VARIANT_KWARG_KEYS"):
+        builtins.VARIANT_KWARG_KEYS = {"adapter_name"}
     tokenizer = get_chat_template(tokenizer, chat_template="gemma3")
     model = PeftModel.from_pretrained(model, adapter_dir)
     model.eval()
