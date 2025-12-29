@@ -7,6 +7,7 @@ import importlib
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+import _bootstrap  # noqa: F401
 import torch
 from datasets import load_dataset
 from unsloth import FastModel
