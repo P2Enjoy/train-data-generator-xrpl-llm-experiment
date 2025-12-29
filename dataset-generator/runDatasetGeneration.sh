@@ -46,7 +46,8 @@ echo "Using UV_CACHE_DIR=${UV_CACHE_DIR}"
 echo "Installing / syncing dependencies with uv..."
 uv sync
 
-eval "$(UV_CACHE_DIR="${UV_CACHE_DIR}" uv run python - <<'PY'
+env_exports=$(
+  UV_CACHE_DIR="${UV_CACHE_DIR}" uv run python - "$CONFIG_PATH" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -70,7 +71,10 @@ emit("final_schemas_out", "outputs/d_02_final_schemas.jsonl")
 emit("schema_queries_out", "outputs/d_03_schema_queries.jsonl")
 emit("dataset_out", "outputs/d_04_dataset.jsonl")
 emit("training_corpus_out", "outputs/d_05_training_corpus.jsonl")
-PY "$CONFIG_PATH")"
+PY
+)
+
+eval "${env_exports}"
 
 run_step() {
   local name="$1"

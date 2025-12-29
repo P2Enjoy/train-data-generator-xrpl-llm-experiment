@@ -13,7 +13,9 @@
     "final_schemas_out": "outputs/d_02_final_schemas.jsonl",
     "schema_queries_out": "outputs/d_03_schema_queries.jsonl",
     "dataset_out": "outputs/d_04_dataset.jsonl",
-    "training_corpus_out": "outputs/d_05_training_corpus.jsonl"
+    "training_corpus_out": "outputs/d_05_training_corpus.jsonl",
+    "positives_per_schema": 250,
+    "negative_ratio": 0.6
   },
   "training": {
     "training_corpus": "outputs/d_05_training_corpus.jsonl",
@@ -25,8 +27,8 @@
     "learning_rate": 5e-5,
     "weight_decay": 0.01,
     "warmup_steps": 50,
-    "num_epochs": 300.0,
-    "max_steps": null,
+    "num_epochs": 20.0,
+    "max_steps": 3000,
     "logging_steps": 10,
     "eval_steps": 50,
     "save_steps": 200,
