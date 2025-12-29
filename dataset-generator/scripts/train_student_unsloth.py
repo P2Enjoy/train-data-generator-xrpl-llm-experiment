@@ -140,6 +140,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-total-limit", type=int, default=int(defaults.get("save_total_limit", 3)), help="How many checkpoints to keep.")
     parser.add_argument("--val-split", type=float, default=float(defaults.get("val_split", 0.05)), help="Validation split fraction.")
     parser.add_argument(
+        "--eval-accumulation-steps",
+        type=int,
+        default=int(defaults.get("eval_accumulation_steps", 1)),
+        help="Gradient accumulation for eval to reduce memory on long contexts.",
+    )
+    parser.add_argument(
         "--max-samples",
         type=int,
         default=defaults.get("max_samples", None),
@@ -192,6 +198,23 @@ def load_corpus(
     max_seq_length: int,
 ) -> Tuple[Any, Any]:
     dataset = load_dataset("json", data_files=str(path), split="train")
+
+    # Deduplicate by prompt+completion to reduce train/eval leakage when splitting.
+    seen: set[str] = set()
+
+    def dedup(example: Dict[str, Any]) -> bool:
+        key = (example.get("prompt") or "") + (example.get("completion") or "")
+        if key in seen:
+            return False
+        seen.add(key)
+        return True
+
+    before_dedup = len(dataset)
+    dataset = dataset.filter(dedup)
+    dropped_dupes = before_dedup - len(dataset)
+    if dropped_dupes:
+        print(f"[data] dropped {dropped_dupes} duplicate samples before split")
+
     if max_samples:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
 
@@ -411,6 +434,7 @@ def main() -> None:
         fp16=not args.bf16 and torch.cuda.is_available(),
         output_dir=str(args.output_dir),
         gradient_checkpointing=args.use_gradient_checkpointing,
+        eval_accumulation_steps=args.eval_accumulation_steps,
     )
 
     trainer = CleanSFTTrainer(

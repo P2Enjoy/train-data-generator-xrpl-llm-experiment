@@ -8,17 +8,19 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
 
 WITH_TRAINING=0
 WITH_EVALS=0
+WITH_ALIGNMENT=0
 MODEL_ARG=()
 CONFIG_PATH="config/defaults.json"
 
 usage() {
   cat <<EOF
-Usage: $0 [--model MODEL] [--with-training] [--with-evals]
+Usage: $0 [--model MODEL] [--with-training] [--with-evals] [--with-alignment]
 
 This wraps the per-stage runners:
   - runDatasetGeneration.sh (always)
   - runTraining.sh (when --with-training)
   - runEvals.sh (when --with-evals)
+  - runAlignment.sh (when --with-alignment; implies teacher-evaluated pairs + DPO stage)
 
 Pass model override to the dataset generator with --model.
 Use the individual runner scripts for finer control over arguments.
@@ -43,6 +45,10 @@ while [[ $# -gt 0 ]]; do
       WITH_EVALS=1
       shift
       ;;
+    --with-alignment)
+      WITH_ALIGNMENT=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -63,6 +69,10 @@ fi
 
 if [[ $WITH_EVALS -eq 1 ]]; then
   "$ROOT/runEvals.sh"
+fi
+
+if [[ $WITH_ALIGNMENT -eq 1 ]]; then
+  "$ROOT/runAlignment.sh" --config "${CONFIG_PATH}"
 fi
 
 echo "runAll complete."

@@ -217,6 +217,7 @@ def evaluate_sample(
         "query": sample["query"],
         "target_valid": sample.get("is_valid", True),
         "raw_output": decoded,
+        "prompt_text": prompt_text,
     }
 
     try:

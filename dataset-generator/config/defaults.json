@@ -33,6 +33,7 @@
     "save_total_limit": 3,
     "val_split": 0.05,
     "eval_max_samples": 256,
+    "eval_accumulation_steps": 2,
     "max_samples": null,
     "seed": 3407,
     "load_in_4bit": true,
@@ -41,5 +42,22 @@
     "lora_r": 64,
     "lora_alpha": 128,
     "lora_dropout": 0.05
+  },
+  "alignment": {
+    "pairs_out": "outputs/student_runs/alignment/dpo_pairs.jsonl",
+    "eval_results": "outputs/student_runs/eval/evaluation_results.jsonl",
+    "base_model": "unsloth/gemma-3-270m-it",
+    "adapter": "outputs/student_runs/gemma3-270m/checkpoint-final",
+    "output_dir": "outputs/student_runs/gemma3-270m-dpo",
+    "max_seq_length": 32768,
+    "batch_size": 2,
+    "grad_accum": 8,
+    "learning_rate": 5e-06,
+    "warmup_steps": 50,
+    "max_steps": 500,
+    "logging_steps": 10,
+    "beta": 0.1,
+    "load_in_4bit": true,
+    "bf16": true
   }
 }

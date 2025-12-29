@@ -1,462 +1,409 @@
-# Project Manifest – Schema-Conditioned DSL → AST LLM (SMOL 1.7B)
+# Schema‑Conditioned DSL → JSON AST (Gemma 3 270M student)
 
-## 1. Strategic Objective
+This repository is a **complete, teacher-in-the-loop pipeline** to build a small model that can:
 
-Build a small, on-device friendly LLM (SMOL 1.7B class) that:
+- Read a **JSON Schema** describing a DSL
+- Read a natural language **query** (EN/FR)
+- Output **one JSON object** (an AST) that **validates against the schema** and matches the query intent
 
-* Ingests a **JSON Schema** that defines a DSL (fields, operators, values, structure, semantics via descriptions).
-* Ingests a **natural language query** in English or French only (EN/FR).
-* Outputs a **JSON AST** that is a valid instance of the DSL (and of the given JSON Schema), suitable for deterministic execution by downstream engines.
+The teacher is a local **Ollama** model (configured via `.llmrc` or `LLM_MODEL`). The student is **Gemma 3 270M** fine-tuned with **Unsloth LoRA**. After SFT, the repo runs a **teacher‑aligned preference tuning step (DPO)** using teacher verdicts.
 
-Target usage:
+## What you run (high level)
 
-* Local / mobile inference for interactive query → DSL translation.
-* Pluggable parser engine for multiple domains (events, work, cooking, meetings, etc.) with the **same structural template** but different field/value vocabularies.
+There are four stages:
 
-## 2. Target Model – SMOL 1.7B
+1) **Dataset generation (teacher)** → JSONL artifacts under `outputs/d_0*_*.jsonl`  
+2) **SFT training (student)** → LoRA checkpoints + `training_metrics.jsonl`  
+3) **Teacher evaluation** → per-sample + summary evaluation JSON files  
+4) **Teacher-aligned DPO** → a second LoRA checkpoint aligned to teacher preferences
 
-* Base model: a small, open HF model in the ~1.5–2B range ("SMOL 1.7B" class).
-* Properties required:
+If you only run one command, use `runAll.sh` (see Quickstart).
 
-  * Instruction-tuned / chat-ready baseline.
-  * Context window ≥ 8K tokens (ideal 16K) to handle large JSON Schemas.
-  * Good performance on structured / code-like tasks.
-* Fine-tuning strategy:
+---
 
-  * Parameter-efficient (QLoRA / LoRA) using **Unsloth**.
-  * Quantization for deployment: 4-bit (GGUF or equivalent) for mobile/edge inference.
+## Requirements
 
-## 3. High-Level Architecture – 3 Pipelines
+- **Python 3.12+** and **uv** (this repo uses `uv sync` + `uv run`)
+- **CUDA GPU** strongly recommended for training (`runTraining.sh` sets CUDA env vars used in this environment)
+- **Ollama** installed locally and a teacher model pulled (default: `gpt-oss:120b`)
 
-### 3.1 Pipeline A – Schema & Domain Generator (Meta-Schema LLM)
+### Teacher model configuration
 
-**Goal:** Generate diverse DSL schemas for different domains while keeping the **core JSON Schema structure fixed**.
+The teacher model id is resolved in this order:
 
-* Inputs:
+1) `LLM_MODEL` environment variable  
+2) `.llmrc` file at repo root (one line: model id)  
+3) fallback: `gpt-oss:120b`
 
-  * A base JSON Schema template (e.g. FunnelDefinition) that defines:
+Example:
 
-    * Structural layout (object → steps → conditions, timeframe, etc.).
-    * Node types and constraints (required fields, enums, oneOf, additionalProperties=false, etc.).
-  * Domain prompts (e.g. "events", "work tasks", "cooking recipes", "meeting planner").
-
-* Process:
-
-  * A “meta-prompt” LLM generates **domain specializations**:
-
-    * A list of `field` identifiers (e.g. `c.firstname`, `task.priority`, `recipe.type`).
-    * For each field where relevant, a set of allowed enum `value`s.
-    * Optionally, short descriptions for fields and values.
-  * Output format: **JSONL**, one document per domain schema:
-
-    ```json
-    {
-      "schema_id": "events_funnel_v1",
-      "domain": "events",
-      "fields": [
-        { "const": "ec.team", "description": "High-level event team" },
-        { "const": "c.firstname", "description": "Contact first name" }
-      ],
-      "enums": {
-        "ec.team": ["All", "Launch", "Learn", "Build", "Adopt", "Engage"],
-        "ec.persona": ["Developers", "Corporates", "Community", "Internal"]
-      }
-    }
-    ```
-
-* Post-processing:
-
-  * A deterministic Python builder injects fields/enums into the **fixed base template** to produce the final JSON Schema for that domain.
-  * The structure is never edited directly by the LLM, only filled through controlled slots.
-
-### 3.2 Pipeline B – Dataset Generator (Teacher LLM + Validator)
-
-**Goal:** Produce a large, high-quality dataset of (schema, query, AST) triples, plus synthetically corrupted negatives.
-
-#### 3.2.1 Positive Examples (Teacher LLM)
-
-* For each `schema_id`:
-
-  * Generate multiple **natural language queries** per schema:
-
-    * LLM-generated based on schema descriptions.
-    * Optionally, curated manual prompts for priority domains.
-  * For each (schema, query) pair:
-
-    * Call a strong teacher LLM (e.g. GPT-4.x-class) with:
-
-      * Developer message: instructions to output **only JSON AST**, strictly schema-compliant, with internal reasoning but no explanation.
-      * Assistant message: “I MUST ADHERE TO THIS SCHEMA” followed by the full JSON Schema.
-      * User message: the query.
-    * Validate the returned JSON instance using a JSON Schema validator.
-    * If valid → store as **positive sample**.
-
-* Positive sample format (JSONL):
-
-  ```json
-  {
-    "schema_id": "events_funnel_v1",
-    "schema_json": "{...full JSON Schema as string...}",
-    "query": "All events from Paris and concerning the company employees",
-    "ast_json": "{...AST JSON...}",
-    "is_valid": true,
-    "validation_error": null
-  }
-  ```
-
-#### 3.2.2 Negative Examples (Synthetic Mutations + Natural Errors)
-
-* Start from valid ASTs (positives) and generate **controlled corruptions**:
-
-  * Structural:
-
-    * Remove required fields (e.g. drop `timeframe` or `conditions`).
-    * Add unexpected properties under `additionalProperties`: false.
-  * Type / enum:
-
-    * Change `value` to a non-enum string when enum is enforced.
-    * Change field type (string → number, etc.).
-  * DSL semantics:
-
-    * Use a mismatched field for a concept (e.g. mapping “employees” to a persona unrelated to employees).
-    * Break business rules (e.g. `timeframe.end` < `timeframe.start`).
-
-* Optionally keep some **raw teacher mistakes** as negatives.
-
-* Negative sample format:
-
-  ```json
-  {
-    "schema_id": "events_funnel_v1",
-    "schema_json": "{...}",
-    "query": "All events from Paris and concerning the company employees",
-    "ast_json": "{...corrupted AST...}",
-    "is_valid": false,
-    "validation_error": "Additional properties are not allowed ('foo' was unexpected)",
-    "error_type": "extra_property"
-  }
-  ```
-
-* Dataset design:
-
-  * Balanced valid/invalid ratio (target ~70% valid, 30% invalid for pretraining the student; can add a final clean phase with only valid data).
-  * Domain diversity: events, work, cooking, meetings, etc., all sharing the same structural schema template.
-
-### 3.3 Pipeline C – Student Training (Unsloth + SMOL 1.7B)
-
-**Goal:** Distill teacher behaviour into SMOL 1.7B so it can:
-
-* Read a full JSON Schema (DSL definition) + natural language query.
-* Emit a **schema-compliant AST JSON**.
-
-#### 3.3.1 Training Sample Format
-
-* **Input text (prompt)**
-
-  ```text
-  You are a JSON AST generator.
-  You must output a single JSON object that satisfies the following JSON Schema
-  and represents the program matching the user request.
-
-  [SCHEMA]
-  {...full JSON Schema...}
-  [/SCHEMA]
-
-  [QUERY]
-  All events from Paris and concerning the company employees
-  [/QUERY]
-
-  [OUTPUT]
-  ```
-
-* **Output text (target)**
-
-  ```text
-  {
-    "prompt": "All events from Paris and concerning the company employees",
-    "steps": [...],
-    "timeframe": {...}
-  }
-  ```
-
-* Loss masking:
-
-  * Use causal LM setup; mask the loss on the prompt part, apply loss only on the AST tokens.
-
-#### 3.3.2 Training Configuration
-
-* Framework: Unsloth + PyTorch / HF Transformers.
-* Fine-tuning method: QLoRA / LoRA on top of SMOL 1.7B.
-* Hyperparameters (baseline):
-
-  * LR: ~1–2e-4 for adapters.
-  * Batch size (effective) tuned for GPU constraints using gradient accumulation.
-  * Training steps / epochs: tuned based on validation loss plateau.
-* Checkpoints:
-
-  * Save intermediate adapters often; run schema-based evaluation between phases.
-
-#### 3.3.3 Evaluation & Metrics
-
-* Standard metrics:
-
-  * Exact match of AST JSON (strict string equality after canonicalization).
-  * Structural match (ignoring whitespace and field ordering) using JSON diff.
-* Schema-based metrics:
-
-  * JSON Schema validation pass rate on generated ASTs.
-  * Distribution of validation error types.
-* Semantic metrics:
-
-  * NL → AST alignment sanity checks for curated test cases.
-  * Teacher adjudication of schema-valid student outputs: the teacher inspects the candidate AST plus schema and query and returns `is_good`/`reason`; an answer only passes if it is schema-valid **and** the teacher confirms it satisfies the query.
-  * Teacher is enabled by default using the local ollama model configured in `.llmrc` (or `LLM_MODEL`); evaluation will fail fast if no teacher is configured.
-
-## CLI reference (all flags, defaults in `config/defaults.json` unless noted)
-
-### Dataset generation
-- `scripts/generate_domain_specs.py`: `--config` defaults JSON; `--prompts` domain prompts JSONL; `--out` specs JSONL; `--model` ollama id (from `.llmrc`/`LLM_MODEL` via `default_model()`); `--seed` for deterministic fallbacks; `--examples-per-schema` query count to request from LLM; `--offline-fallback` to skip ollama and emit stub specs.
-- `scripts/build_schemas.py`: `--config`; `--base-template` base JSON Schema; `--domain-specs` specs JSONL; `--out` final schemas JSONL; `--operator-catalog` pool to sample operators; `--min-operators` / `--max-operators` counts; `--seed` for operator sampling.
-- `scripts/generate_example_queries.py`: `--config`; `--schemas` final schemas JSONL; `--out` schema+queries JSONL; `--per-schema` number of queries per schema; `--model` ollama id; `--offline-fallback` to use deterministic stubs; `--seed` for stubs; `--max-retries` when parsing LLM output.
-- `scripts/generate_dataset.py`: `--config`; `--schemas` final schemas JSONL; `--out` dataset JSONL; `--positives-per-schema` validated samples per schema; `--negative-ratio` negatives per positive; `--seed`.
-- `scripts/build_training_corpus.py`: `--config`; `--dataset` dataset JSONL; `--out` prompt/target JSONL; `--include-invalid` to keep negatives; `--max-samples` optional cap.
-
-### Training and evaluation
-- `scripts/train_student_unsloth.py`: `--config`; `--training-corpus`; `--output-dir`; `--base-model`; `--max-seq-length`; `--batch-size`; `--grad-accum`; `--learning-rate`; `--weight-decay`; `--warmup-steps`; `--num-epochs`; `--max-steps`; `--logging-steps`; `--eval-steps`; `--save-steps`; `--save-total-limit`; `--val-split`; `--max-samples`; `--seed`; `--load-in-4bit`; `--bf16`; `--use-gradient-checkpointing`; `--resume-from-checkpoint`; `--lora-r`; `--lora-alpha`; `--lora-dropout`; `--eval-max-samples`.
-- `scripts/evaluate_student.py`: `--dataset`; `--adapter`; `--base-model`; `--max-seq-length`; `--max-new-tokens`; `--max-samples`; `--include-invalid`; `--temperature`; `--top-p`; `--load-in-4bit`; `--out-dir`; `--teacher-model` (required, defaults to `.llmrc`/`LLM_MODEL` via `default_model()`); `--log-every`.
-- `scripts/report_training.py`: `--training-metrics`; `--eval-summary`; `--eval-results`; `--run-config`; `--out-dir`; `--report-name`.
-
-### Teacher sanity checks
-- `scripts/test_teacher.py`: `--training-corpus`; `--model` ollama id (default `.llmrc`/`LLM_MODEL`); `--max-samples`.
-- `scripts/test_inference_teacher.py`: `--schema-id`; `--prompt`; `--schema-source` schemas JSONL; `--model` ollama id (default `.llmrc`/`LLM_MODEL`); `--current-date` ISO date for prompt context.
-
-### Utilities
-- `scripts/pretty_jsonl.py`: `--input` JSONL; `--out` prettified JSON; `--limit` cap records.
-
-### Convenience runners
-- `runDatasetGeneration.sh`: `--model` ollama id override for dataset steps; `--config` defaults JSON path.
-- `runTraining.sh`: accepts `-h/--help`, otherwise forwards all args to `scripts/train_student_unsloth.py` after `uv sync`.
-- `runEvals.sh`: accepts `--out-dir` (eval output root), `--adapter` (LoRA checkpoint dir), `-h/--help`; forwards other args to `scripts/evaluate_student.py`, then builds a report.
-- `runAll.sh`: `--model` (passes to dataset generation), `--config`, `--with-training`, `--with-evals`; runs dataset generation always, optional training/evals.
-
-## 4. Canonicalization & Normalization
-
-To stabilize training for a small model:
-
-* **JSON canonicalization:**
-
-  * Deterministic property ordering in all ASTs.
-  * Consistent indentation and whitespace.
-  * No comments, no trailing commas.
-
-* **Prompt canonicalization:**
-
-  * Same marker tokens `[SCHEMA]`, `[QUERY]`, `[OUTPUT]` for all examples.
-  * Same intro instructions across the entire dataset.
-
-* **Schema preprocessing:**
-
-  * Retain: titles, descriptions, enums, constraints relevant to semantic mapping.
-  * Optionally strip redundant comments to reduce context size while preserving meaning.
-
-## 5. Inference Contract (Runtime API)
-
-The runtime API for the distilled model should be stable and constrained to English and French (EN/FR).
-
-* **Input:**
-
-  ```json
-  {
-    "schema_id": "events_funnel_v1",
-    "schema_json": "{...}",
-    "query": "All events from Paris and concerning the company employees"
-  }
-  ```
-
-* **Internal prompt building:**
-
-  * Embed into the canonical text prompt with `[SCHEMA]`, `[QUERY]`, `[OUTPUT]` markers.
-
-* **Output (expected):**
-
-  ```json
-  {
-    "prompt": "All events from Paris and concerning the company employees",
-    "steps": [...],
-    "timeframe": {...}
-  }
-  ```
-
-* **Post-processing:**
-
-  * Parse model output as JSON.
-  * Validate against the schema.
-  * If invalid:
-
-    * Optionally run a rule-based fixer / second-pass prompt.
-    * Or return a structured error to the caller.
-
-## 6. Tech Stack & Tooling
-
-* **Data & orchestration:**
-
-  * Python for pipelines A/B/C.
-  * JSONL for datasets and schema descriptions.
-  * `jsonschema` (or equivalent) for validation.
-
-* **Modeling & training:**
-
-  * Hugging Face Transformers ecosystem.
-  * Unsloth for efficient QLoRA / LoRA fine-tuning.
-  * Weights & Biases (or similar) for experiment tracking (optional but recommended).
-
-* **Deployment:**
-
-  * Quantized weights (4-bit) in a mobile/edge-friendly format.
-  * Simple HTTP/gRPC microservice or local binding for mobile apps.
-
-## 7. Roadmap & Milestones
-
-1. **MVP DSL & Schema Template**
-
-   * Finalize base JSON Schema template (FunnelDefinition-style).
-   * Implement deterministic schema builder from domain field/enum specs.
-
-2. **Synthetic Data v1**
-
-   * Generate first set of domain specializations (events + 1–2 others).
-   * Build data generator for positives and synthetic negatives.
-   * Obtain ~10k–50k training examples.
-
-3. **First Distillation Run (SMOL 1.7B)**
-
-   * Fine-tune with Unsloth using the v1 dataset.
-   * Evaluate on held-out schemas and curated test queries.
-
-4. **Iteration & Hardening**
-
-   * Add more domains and harder NL queries.
-   * Improve negative sampling and semantic test suites.
-   * Refine prompt / JSON canonicalization.
-
-5. **Packaging & Deployment**
-
-   * Export quantized model.
-   * Wrap with an inference API that hides prompt-building internals.
-   * Integrate into target mobile / local environments.
-
-## 8. Open Questions / Design Decisions
-
- * The model strictly emits JSON ASTs only; no explanation or debug mode is required.
- * Which domains are strategic enough to justify manual curation of gold test sets?
- * Backward compatibility of ASTs is **not** a requirement; schema and model versions may introduce breaking changes.
-
-This manifest serves as the reference backbone for subsequent design docs, implementation tasks, and experiment tracking for the schema-conditioned AST LLM built on SMOL 1.7B.
-
-## Local Pipeline Scripts
-
-Multi-step scripts now call the local Ollama model `gpt-oss:120b` to generate compliant JSON Schemas with rich descriptions and to surface example natural-language queries per schema. Each step reads JSONL and writes JSONL so you can inspect outputs or swap files manually.
-
-0) Fast bootstrap via `runAll.sh` (ensures `uv sync` runs and each step executes if its output is missing):
 ```bash
-./runAll.sh
+echo "gpt-oss:120b" > .llmrc
+# or:
+export LLM_MODEL="gpt-oss:120b"
 ```
 
-1) Domain spec synthesis (prompts → fields/enums/descriptions + example queries, via Ollama):
-```bash
-python scripts/generate_domain_specs.py \
-  --prompts data/domain_prompts.jsonl \
-  --out outputs/d_01_domain_specs.jsonl \
-  --model gpt-oss:120b
-```
+---
 
-2) Schema build (inject specs into the base template similar to the provided FunnelDefinition example, with `allOf` enum guards):
-```bash
-python scripts/build_schemas.py \
-  --domain-specs outputs/d_01_domain_specs.jsonl \
-  --base-template data/base_schema_template.json \
-  --operator-catalog data/operator_catalog.json \
-  --out outputs/d_02_final_schemas.jsonl
-```
-`build_schemas.py` also samples a per-schema operator set (defaults to 4–7) from `data/operator_catalog.json` so each schema exposes a slightly different operator vocabulary. Set `--min-operators` / `--max-operators` / `--seed` to control that spread.
+## Quickstart (recommended)
 
-3) Example queries for each generated schema (LLM-generated, EN/FR mix):
 ```bash
-python scripts/generate_example_queries.py \
-  --schemas outputs/d_02_final_schemas.jsonl \
-  --out outputs/d_03_schema_queries.jsonl \
-  --per-schema 6 \
-  --model gpt-oss:120b
-```
+# 0) Install deps
+uv sync
 
-4) Dataset creation (positive + synthetic negative ASTs with JSON Schema validation):
-```bash
-python scripts/generate_dataset.py \
-  --schemas outputs/d_02_final_schemas.jsonl \
-  --out outputs/d_04_dataset.jsonl \
-  --positives-per-schema 8 \
-  --negative-ratio 0.4
-```
-Operators in each AST are sampled from the schema-specific operator list so the student model must pay attention to the allowed operator vocabulary per schema; negatives include unsupported operator mutations.
-
-5) Training text export (canonical prompt/target pairs):
-```bash
-python scripts/build_training_corpus.py \
-  --dataset outputs/d_04_dataset.jsonl \
-  --out outputs/d_05_training_corpus.jsonl
+# 1) Run everything: dataset -> SFT -> eval -> DPO alignment
+./runAll.sh --with-training --with-evals --with-alignment
 ```
 
 Notes:
-- `runAll.sh` wraps the entire pipeline, calls `uv sync`, and uses `uv run python …` so you never have to spell the `uv` invocations yourself. It skips steps whose outputs already exist and always continues with downstream stages.
-- `runAll.sh` also retries a step automatically if its output logs contain `[warn]`, so intermittent Ollama glitches will trigger a second attempt before failing.
-- `reset.sh` removes `outputs/` so you can start fresh before running `./runAll.sh` (it recreates everything).
-- The default Ollama model is stored in `.llmrc` (set to `gpt-oss:120b`). `runAll.sh` reads this file, but you can pass `--model <name>` or set `LLM_MODEL` in the environment when you need a different model.
-- `data/base_schema_template.json` mirrors the FunnelDefinition shape (prompt, steps with named conditions using `operator` and `value`, timeframe with start/end dates). `build_schemas.py` injects field `oneOf` entries and per-field `allOf` enum constraints produced by the LLM.
-- `generate_domain_specs.py` and `generate_example_queries.py` call Ollama by default; pass `--offline-fallback` to use deterministic stubs if the model is unavailable. Ensure `ollama run gpt-oss:120b` works locally before running the pipeline.
-- Default inputs live under `data/`; numbered outputs go to `outputs/d_0*_*.jsonl`. Validation is performed during dataset creation to label valid vs. invalid rows.
+- `--with-alignment` requires the **Ollama teacher** to be available (alignment is built from teacher verdicts).
+- If you want to override the teacher model for dataset generation, use `./runAll.sh --model <ollama_id> ...`.
+- Defaults come from `config/defaults.json` unless overridden with CLI flags.
 
-### Pretty JSON outputs
+---
 
-After generating the JSONL artifacts, `runAll.sh` also runs `scripts/pretty_jsonl.py` to emit a human-readable copy of each file under `outputs/pretty/…`. These files are JSON arrays with 2-space indentation so you can quickly inspect full schema/dataset dumps without manual tooling.
+## Configuration (`config/defaults.json`)
 
-## Teacher smoke test
+The repository is driven by `config/defaults.json`:
 
-Use `scripts/test_teacher.py` to replay prompts from `outputs/d_05_training_corpus.jsonl` against `gpt-oss:120b`. It shows the LLM’s JSON output, the stored completion, and a diff if they diverge:
+- `dataset_generation`: sizes/ratios and output file paths for schema/data creation
+- `training`: SFT hyperparameters and the student run directory
+- `alignment`: DPO hyperparameters and file paths for preference pairs
 
-```bash
-uv run python scripts/test_teacher.py --training-corpus outputs/d_05_training_corpus.jsonl --model gpt-oss:120b --max-samples 2
+You can either:
+- Edit `config/defaults.json`, or
+- Pass overrides on the command line to the scripts/runners.
+
+---
+
+## Pipeline outputs (what files to look at)
+
+### Dataset generation artifacts
+
+All are JSONL:
+
+- `outputs/d_01_domain_specs.jsonl`: teacher-generated domain field/value specs
+- `outputs/d_02_final_schemas.jsonl`: final JSON Schemas (one per domain/schema_id)
+- `outputs/d_03_schema_queries.jsonl`: example queries per schema
+- `outputs/d_04_dataset.jsonl`: (schema, query, ast_json, is_valid, …)
+- `outputs/d_05_training_corpus.jsonl`: training corpus with `prompt` + `completion`
+
+Prettified copies are written to `outputs/pretty/*.json` for inspection.
+
+### SFT training artifacts
+
+Directory: `outputs/student_runs/gemma3-270m/` (default)
+
+- `checkpoint-*`: periodic LoRA checkpoints
+- `checkpoint-final/`: final LoRA adapter + tokenizer (when training completes)
+- `training_metrics.jsonl`: streaming training/eval metrics (JSON per line)
+- `run_config.json`: resolved training config for reproducibility
+
+### Teacher evaluation artifacts
+
+Directory: `outputs/student_runs/eval/` (default)
+
+- `evaluation_results.jsonl`: per-sample eval records (student output + schema checks + teacher signals)
+- `evaluation_summary.json`: aggregate rates (parsed/schema valid/teacher accept/etc)
+
+### DPO alignment artifacts
+
+Directory: `outputs/student_runs/gemma3-270m-dpo/` (default)
+
+- `checkpoint-final/`: aligned LoRA adapter + tokenizer
+- Pairs file: `outputs/student_runs/alignment/dpo_pairs.jsonl` (default)
+
+---
+
+## How evaluation works (important)
+
+There are **two different “evaluation” concepts** in this repo:
+
+1) **Trainer `eval_loss` during SFT** (teacher-free)  
+   - Runs every `eval_steps` on a held-out split of `outputs/d_05_training_corpus.jsonl`.  
+   - Measures **cross-entropy against the stored target completions** (AST JSON).  
+   - Useful for early overfitting signals, but it does *not* tell you if the AST matches the query semantically.
+
+2) **Teacher evaluation (`scripts/evaluate_student.py`)** (teacher-in-the-loop)  
+   - Actually runs generation, parses JSON, validates schema, and asks the teacher to judge semantics.  
+   - Produces decision‑grade metrics like `teacher_accept_rate` and `semantic_pass_rate`.
+
+Alignment (DPO) uses the **teacher evaluation output**.
+
+---
+
+## Reading metrics (with examples)
+
+### 1) SFT training metrics (`training_metrics.jsonl`)
+
+File: `outputs/student_runs/<run>/training_metrics.jsonl`
+
+Two common log shapes:
+
+**Train step log**
+```json
+{"step": 60, "epoch": 0.25, "loss": 0.159, "grad_norm": 1.399, "learning_rate": 4.999885e-05}
 ```
 
-Inspect the printed diffs to verify the teacher model can still produce schema-compliant ASTs before progressing to student fine-tuning.
+- `step`: optimizer step (after gradient accumulation)
+- `epoch`: fractional epoch progress (e.g. `0.25` = 25% through epoch 0→1)
+- `loss`: average training cross-entropy on supervised tokens over the last logging window
+- `grad_norm`: global gradient norm (sanity signal: spikes often mean a bad batch or instability)
+- `learning_rate`: current LR from the scheduler
 
-## Interactive teacher inference
-
-`test_inference_teacher.py` lets you try a new prompt for any schema. It loads `outputs/d_02_final_schemas.jsonl`, builds the canonical `[SCHEMA]`/`[QUERY]` prompt, calls `gpt-oss:120b`, and prints both the raw model reply and the parsed JSON AST.
-
-```bash
-uv run python scripts/test_inference_teacher.py \
-  --schema-id events_funnel_v1 \
-  --prompt "All events attended by Guillaume last year" \
-  --model gpt-oss:120b
+**Eval step log**
+```json
+{"step": 50, "epoch": 0.21, "eval_loss": 0.17636, "eval_runtime": 68.847, "eval_samples_per_second": 2.905, "eval_steps_per_second": 0.726}
 ```
 
-Use this script to sanity-check a single NL request before adding it to your dataset or training loops.
+- `eval_loss`: cross-entropy on the held-out set (teacher-free; targets are the stored completions)
+- `eval_runtime`: seconds spent evaluating
+- `eval_samples_per_second` / `eval_steps_per_second`: throughput metrics for that eval pass
 
-## Student training – Gemma 3 270M (Unsloth)
+How to interpret:
+- If `loss` keeps going down but `eval_loss` starts going up → likely overfitting.
+- If both are `NaN` or `eval_loss` becomes `NaN` → your label masking is broken (this repo now sanity-checks and filters empty-supervision eval batches).
 
-Fine-tune a small student on the generated corpus using Unsloth LoRA adapters, then evaluate and report:
+### 2) Teacher evaluation metrics (`evaluation_summary.json`)
 
-- Install deps (Unsloth, TRL, Transformers): `UV_CACHE_DIR=.uv-cache uv sync`
-- Train: `./runTraining.sh --training-corpus outputs/d_05_training_corpus.jsonl --output-dir outputs/student_runs/gemma3-270m`
-- Evaluate the saved adapter on valid samples (optionally compare to the Ollama teacher):  
-  `./runEvals.sh --adapter outputs/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b`
-- Build plots + Markdown summary (auto-run by `runEvals.sh`): `./runEvals.sh`
+File: `outputs/student_runs/eval/evaluation_summary.json`
 
-## Runner scripts
+Key fields:
+- `parsed_rate`: % outputs that were valid JSON objects
+- `schema_valid_rate`: % outputs that pass JSON Schema validation
+- `exact_match_rate`: % outputs exactly match the stored target AST (canonical JSON string)
+- `teacher_accept_rate`: % outputs the teacher judged as semantically correct
+- `semantic_pass_rate`: % outputs that are both schema-valid **and** teacher-accepted (the best “did it work?” number)
 
-- `runDatasetGeneration.sh [--model MODEL]` → steps 1–5 (domain specs → training corpus) with prettified outputs.  
-- `runTraining.sh [train_student_unsloth.py args…]` → LoRA fine-tune Gemma-3-270M student.  
-- `runEvals.sh [evaluate_student.py args…]` → evaluate student (and optional teacher comparison) then generate report.  
-- `runAll.sh [--model MODEL] [--with-training] [--with-evals]` → wrapper that calls the above in order.  
+### 3) DPO alignment metrics
 
-To avoid permission issues, the runners set `UV_CACHE_DIR=${UV_CACHE_DIR:-.uv-cache}`; override it if you prefer a different cache location.
+During DPO training (`scripts/train_alignment_dpo.py`), TRL prints step logs to stdout (loss/reward signals vary by TRL version/config). The *real* way to evaluate DPO improvements is to:
+
+1) Re-run teacher evaluation on the aligned adapter
+2) Compare `teacher_accept_rate` and `semantic_pass_rate` against the SFT adapter
+
+---
+
+## Runners (recommended interface)
+
+All runners:
+- run `uv sync`
+- then call the underlying Python scripts
+
+### `runDatasetGeneration.sh`
+
+Generates `outputs/d_01` → `outputs/d_05` (and `outputs/pretty/*`).
+
+```bash
+./runDatasetGeneration.sh --config config/defaults.json --model gpt-oss:120b
+```
+
+Flags:
+- `--config`: path to config JSON
+- `--model`: Ollama model id to use for schema/query generation
+
+### `runTraining.sh`
+
+Runs SFT training (`scripts/train_student_unsloth.py`).
+
+```bash
+./runTraining.sh --config config/defaults.json
+```
+
+Any extra args are forwarded to `scripts/train_student_unsloth.py`.
+
+### `runEvals.sh`
+
+Runs evaluation (`scripts/evaluate_student.py`) and then builds a Markdown+plots report (`scripts/report_training.py`).
+
+```bash
+./runEvals.sh --adapter outputs/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b
+```
+
+### `runAlignment.sh` (teacher-required)
+
+Runs the full alignment stage:
+
+1) `scripts/evaluate_student.py` (**must use the Ollama teacher**)  
+2) `scripts/build_alignment_pairs.py` (build chosen/rejected pairs from teacher outputs)  
+3) `scripts/train_alignment_dpo.py` (DPO preference fine-tune)
+
+```bash
+./runAlignment.sh \
+  --config config/defaults.json \
+  --adapter outputs/student_runs/gemma3-270m/checkpoint-final \
+  --teacher-model gpt-oss:120b
+```
+
+### `runAll.sh`
+
+Orchestrates the pipeline:
+
+```bash
+./runAll.sh --config config/defaults.json --with-training --with-evals --with-alignment
+```
+
+Flags:
+- `--model`: teacher model override for dataset generation steps
+- `--with-training`: run SFT training
+- `--with-evals`: run evaluation + report
+- `--with-alignment`: run teacher eval + DPO alignment
+
+---
+
+## Script reference (what each one does + key flags)
+
+Tip: every script supports `--help` for the exhaustive flag list. The sections below explain the flags you will actually tune most often.
+
+### Dataset generation scripts
+
+These are called by `runDatasetGeneration.sh` in order:
+
+#### `scripts/generate_domain_specs.py`
+
+Purpose: ask the teacher to produce domain-specific fields + enum values + example queries.
+
+Key flags:
+- `--config`: uses `dataset_generation.*` defaults
+- `--model`: Ollama model id (teacher)
+- `--prompts`: domain prompt file (`data/domain_prompts.jsonl`)
+- `--examples-per-schema`: how many example queries to ask for per schema
+- `--offline-fallback`: skip Ollama and generate deterministic stubs (testing only)
+
+#### `scripts/build_schemas.py`
+
+Purpose: inject generated fields/enums/operators into `data/base_schema_template.json` to create final JSON Schemas.
+
+Key flags:
+- `--domain-specs`: input from `generate_domain_specs.py`
+- `--operator-catalog`: operator pool (`data/operator_catalog.json`)
+- `--min-operators` / `--max-operators`: sampled per schema to vary operator vocab
+
+#### `scripts/generate_example_queries.py`
+
+Purpose: ask the teacher for more NL queries per schema to diversify the dataset.
+
+Key flags:
+- `--schemas`: input from `build_schemas.py`
+- `--per-schema`: how many queries per schema
+- `--model`: Ollama model id (teacher)
+- `--offline-fallback`: testing only
+
+#### `scripts/generate_dataset.py`
+
+Purpose: build `(schema, query) → AST` training rows by calling the teacher and validating against JSON Schema; then synthesize invalid negatives.
+
+Key flags:
+- `--positives-per-schema`: how many validated teacher rows to keep per schema
+- `--negative-ratio`: how many invalid negatives per positive
+- `--seed`: controls deterministic sampling/mutations
+
+#### `scripts/build_training_corpus.py`
+
+Purpose: convert dataset rows into the actual SFT corpus (`prompt` + `completion`) used by the student trainer.
+
+Key flags:
+- `--include-invalid`: include invalid rows in the corpus (usually keep `true` early, then try a clean-only phase)
+- `--max-samples`: cap output size for quick iteration
+
+### `scripts/train_student_unsloth.py` (SFT training)
+
+Purpose: fine-tune `unsloth/gemma-3-270m-it` with LoRA on the training corpus.
+
+Inputs/outputs:
+- Input: `--training-corpus` (defaults to `training.training_corpus`)
+- Output: `--output-dir` (defaults to `training.output_dir`)
+
+Key flags (grouped):
+- Data split:
+  - `--val-split`: fraction held out for `eval_loss` (0 disables eval)
+  - `--eval-max-samples`: cap eval set size for faster eval
+- Sequence budget:
+  - `--max-seq-length`: token budget per example (higher = more context, much more memory)
+- Training schedule:
+  - `--max-steps` or `--num-epochs`: stop condition
+  - `--logging-steps`, `--eval-steps`, `--save-steps`, `--save-total-limit`
+- Optimization:
+  - `--learning-rate`, `--weight-decay`, `--warmup-steps`
+  - `--batch-size`, `--grad-accum` (effective batch = batch_size × grad_accum)
+- Precision/memory:
+  - `--load-in-4bit`, `--bf16`, `--use-gradient-checkpointing`
+  - `--eval-accumulation-steps`: accumulate eval batches to fit long contexts (e.g., 32K tokens)
+- LoRA:
+  - `--lora-r`, `--lora-alpha`, `--lora-dropout`
+
+### `scripts/evaluate_student.py` (teacher evaluation)
+
+Purpose: generate student outputs, parse JSON, validate schema, and (optionally) compare to teacher outputs.
+
+Important: for alignment, you must run with a teacher model (`--teacher-model` or `.llmrc`/`LLM_MODEL`).
+
+Key flags:
+- `--adapter`: LoRA checkpoint dir to evaluate
+- `--dataset`: dataset JSONL (defaults to `outputs/d_04_dataset.jsonl`)
+- `--teacher-model`: Ollama model id (required for DPO alignment inputs)
+- `--out-dir`: where to write `evaluation_results.jsonl` + `evaluation_summary.json`
+- Generation: `--max-new-tokens`, `--temperature`, `--top-p`
+- Sampling: `--max-samples`, `--include-invalid`
+
+### `scripts/build_alignment_pairs.py` (preference dataset builder)
+
+Purpose: convert teacher eval outputs into DPO-ready pairs:
+
+- prompt: the exact prompt used during eval (`prompt_text`)
+- chosen: teacher canonical AST (`teacher_canonical`)
+- rejected: student canonical AST (`student_canonical`)
+
+Key flags:
+- `--config`: uses `alignment.eval_results` + `alignment.pairs_out` defaults
+- `--only-rejected`: by default keeps only teacher-rejected examples (higher signal)
+- `--max-pairs`: cap dataset size for quick experiments
+
+### `scripts/train_alignment_dpo.py` (DPO alignment)
+
+Purpose: teacher-aligned preference tuning starting from the SFT LoRA adapter.
+
+Key flags:
+- `--pairs`: pairs JSONL (`alignment.pairs_out`)
+- `--adapter`: starting checkpoint (`alignment.adapter`)
+- `--output-dir`: where to save aligned adapter (`alignment.output_dir`)
+- Training: `--max-steps`, `--batch-size`, `--grad-accum`, `--learning-rate`, `--warmup-steps`, `--logging-steps`
+- DPO: `--beta`
+- Precision/memory: `--load-in-4bit`, `--bf16`, `--max-seq-length`
+
+### `scripts/report_training.py` (plots + Markdown report)
+
+Purpose: turn `training_metrics.jsonl` + evaluation files into plots and a Markdown report.
+
+Key flags:
+- `--training-metrics`: usually `outputs/student_runs/<run>/training_metrics.jsonl`
+- `--eval-summary` / `--eval-results`: from `evaluate_student.py`
+- `--out-dir`: where to write `outputs/reports/*`
+
+---
+
+## Troubleshooting
+
+### `eval_loss: NaN`
+
+This almost always means the eval batches have **zero supervised tokens** (all labels masked to `-100`), typically due to:
+- response markers not matching the chat template
+- samples so long that the response is truncated away
+
+This repo includes:
+- an eval-batch sanity check before training
+- filtering to drop samples where the response would be truncated before the token budget
+
+If you still see NaNs:
+- lower `max_seq_length` to something realistic for your GPU/model
+- inspect the longest examples in `outputs/d_05_training_corpus.jsonl`
+
+### “Gemma3ForCausalLM does not accept `num_items_in_batch`”
+
+This is an Unsloth/TRL integration warning about an extra collator field. The trainer in this repo strips it before forwarding to the model.
+
+---
+
+## Global objective (in one sentence)
+
+Generate teacher‑supervised, schema‑conditioned training data and train a small local model that turns natural language requests into schema‑valid JSON AST programs, then align it to teacher semantics via preference tuning.
