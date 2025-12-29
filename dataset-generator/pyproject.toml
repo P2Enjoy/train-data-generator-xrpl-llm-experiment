@@ -6,25 +6,30 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate",
+    "bitsandbytes==0.48.0",
     "datasets",
     "evaluate",
     "flash-attn",
     "jsonschema",
     "matplotlib",
+    "onnx",
     "pandas",
     "peft",
     "seaborn",
     "sentencepiece",
     "torch",
     "torchaudio",
+    "torchvision",
     "transformers==4.56.2",
     "triton",
     "trl==0.22.2",
     "unsloth",
+    "xformers",
 ]
 
 [tool.uv.sources]
-triton = { path = "../../mllib/triton/dist/triton-3.5.1+git0add6826-cp312-cp312-linux_aarch64.whl" }
-torch = { path = "../../mllib/pytorch/dist/torch-2.9.1a0+gitd38164a-cp312-cp312-linux_aarch64.whl" }
-flash-attn = { path = "../../mllib/pytorch/third_party/flash-attention/dist/flash_attn-2.7.4-cp312-cp312-linux_aarch64.whl" }
-torchaudio = { path = "../../mllib/audio/dist/torchaudio-2.9.1+a224ab2-cp312-cp312-linux_aarch64.whl" }
+flash-attn = { path = "../../mlwheel/flash_attn-2.7.4-cp312-cp312-linux_aarch64.whl" }
+xformers = { path = "../../mllib/xformers/dist/xformers-0.0.34+41531cee.d20251229-cp39-abi3-linux_aarch64.whl" }
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu130"

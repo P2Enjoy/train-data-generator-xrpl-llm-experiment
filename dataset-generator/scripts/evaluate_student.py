@@ -65,7 +65,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-invalid", action="store_true", help="Include invalid targets during eval.")
     parser.add_argument("--temperature", type=float, default=0.2, help="Generation temperature.")
     parser.add_argument("--top-p", type=float, default=0.9, help="Generation top-p.")
-    parser.add_argument("--load-in-4bit", action="store_true", help="Load student in 4-bit for eval.")
+    parser.add_argument(
+        "--load-in-4bit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Load student in 4-bit for eval (default: on).",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("outputs/student_runs/eval"), help="Where to store logs.")
     parser.add_argument(
         "--teacher-model",

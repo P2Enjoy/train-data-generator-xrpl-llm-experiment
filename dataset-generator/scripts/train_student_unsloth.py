@@ -4,12 +4,49 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import torch
 from datasets import load_dataset
 from unsloth import FastModel
+
+
+# Patch Unsloth-generated PEFT forward to avoid missing constants in some builds.
+def ensure_variant_keys_patch() -> None:
+    cache_file = Path(__file__).resolve().parent.parent / "unsloth_compiled_cache" / "Linear_peft_forward.py"
+    if cache_file.exists():
+        text = cache_file.read_text(encoding="utf-8")
+        marker = "VARIANT_KWARG_KEYS"
+        if marker not in text:
+            text = text.replace(
+                "from peft.tuners.lora.torchao import (Any, torch)\n",
+                "from peft.tuners.lora.torchao import (Any, torch)\nVARIANT_KWARG_KEYS = ('alora_offsets',)\n",
+                1,
+            )
+            cache_file.write_text(text, encoding="utf-8")
+
+    try:  # noqa: WPS501
+        import unsloth_compiled_cache.Linear_peft_forward as _lpf  # type: ignore
+
+        importlib.reload(_lpf)
+        _lpf.VARIANT_KWARG_KEYS = getattr(_lpf, "VARIANT_KWARG_KEYS", ("alora_offsets",))
+        _lpf.unsloth_forward.__globals__["VARIANT_KWARG_KEYS"] = _lpf.VARIANT_KWARG_KEYS
+    except Exception:  # noqa: BLE001
+        pass
+
+
+ensure_variant_keys_patch()
+try:  # noqa: WPS501
+    import unsloth_compiled_cache.Linear_peft_forward as _lpf
+
+    if not hasattr(_lpf, "VARIANT_KWARG_KEYS"):
+        _lpf.VARIANT_KWARG_KEYS = ("alora_offsets",)
+    # Ensure the forward function sees the constant even if the file is regenerated.
+    _lpf.unsloth_forward.__globals__["VARIANT_KWARG_KEYS"] = _lpf.VARIANT_KWARG_KEYS
+except Exception:  # noqa: BLE001
+    pass
 from unsloth.chat_templates import get_chat_template, train_on_responses_only
 from trl import SFTConfig, SFTTrainer
 from transformers import TrainerCallback, TrainerControl, TrainerState
@@ -68,8 +105,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-split", type=float, default=0.05, help="Validation split fraction.")
     parser.add_argument("--max-samples", type=int, default=None, help="Optional cap on total samples.")
     parser.add_argument("--seed", type=int, default=3407, help="Random seed.")
-    parser.add_argument("--load-in-4bit", action="store_true", help="Enable 4bit quantized training.")
-    parser.add_argument("--bf16", action="store_true", help="Enable bf16 training if supported.")
+    parser.add_argument(
+        "--load-in-4bit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable 4bit quantized training (default: on).",
+    )
+    parser.add_argument(
+        "--bf16",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable bf16 training if supported (default: on to match Gemma weights).",
+    )
     parser.add_argument("--use-gradient-checkpointing", action="store_true", help="Turn on gradient checkpointing.")
     parser.add_argument(
         "--resume-from-checkpoint",
@@ -210,7 +257,7 @@ def main() -> None:
         num_train_epochs=args.num_epochs,
         max_steps=args.max_steps if args.max_steps is not None else -1,
         logging_steps=args.logging_steps,
-        evaluation_strategy="steps" if eval_set is not None else "no",
+        eval_strategy="steps" if eval_set is not None else "no",
         eval_steps=args.eval_steps if eval_set is not None else None,
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
@@ -242,6 +289,9 @@ def main() -> None:
     trainer.add_callback(JsonlLogger(metrics_log))
     save_run_config(args.output_dir / "run_config.json", args, len(train_set), len(eval_set) if eval_set else None)
 
+    # Re-apply variant kwarg patch in case Unsloth regenerated its cache after imports.
+    ensure_variant_keys_patch()
+
     trainer_stats = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     final_dir = args.output_dir / "checkpoint-final"
@@ -257,3 +307,28 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+# Patch Unsloth-generated PEFT forward to avoid missing constants in some builds.
+def ensure_variant_keys_patch() -> None:
+    cache_file = Path(__file__).resolve().parent.parent / "unsloth_compiled_cache" / "Linear_peft_forward.py"
+    if cache_file.exists():
+        text = cache_file.read_text(encoding="utf-8")
+        marker = "VARIANT_KWARG_KEYS"
+        if marker not in text:
+            text = text.replace(
+                "from peft.tuners.lora.torchao import (Any, torch)\n",
+                "from peft.tuners.lora.torchao import (Any, torch)\nVARIANT_KWARG_KEYS = ('alora_offsets',)\n",
+                1,
+            )
+            cache_file.write_text(text, encoding="utf-8")
+
+    try:  # noqa: WPS501
+        import unsloth_compiled_cache.Linear_peft_forward as _lpf  # type: ignore
+
+        importlib.reload(_lpf)
+        _lpf.VARIANT_KWARG_KEYS = getattr(_lpf, "VARIANT_KWARG_KEYS", ("alora_offsets",))
+        _lpf.unsloth_forward.__globals__["VARIANT_KWARG_KEYS"] = _lpf.VARIANT_KWARG_KEYS
+    except Exception:  # noqa: BLE001
+        pass
+
+
+ensure_variant_keys_patch()
