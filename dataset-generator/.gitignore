@@ -1,4 +1,9 @@
 outputs/
-uv.lock
 __pycache__/
+
+.uv-cache/
+.venv/
+.ipynb_checkpoints/
+.vscode/
+
 unsloth_compiled_cache/
