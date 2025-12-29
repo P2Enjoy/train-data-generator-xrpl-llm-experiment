@@ -19,6 +19,7 @@ from unsloth.chat_templates import get_chat_template
 from lib.io import canonical_json, write_jsonl
 from lib.llm import run_ollama
 from lib.parsing import extract_json_object
+from model_config import default_model
 
 PROMPT_TEMPLATE = """You are a JSON AST generator.
 You must output a single JSON object that satisfies the following JSON Schema
@@ -41,14 +42,7 @@ and represents the program matching the user request.
 
 
 def parse_args() -> argparse.Namespace:
-    def get_default_teacher_model() -> str | None:
-        rc_path = Path(".llmrc")
-        if rc_path.exists():
-            model = rc_path.read_text(encoding="utf-8").strip()
-            return model or None
-        return None
-
-    default_teacher = get_default_teacher_model()
+    default_teacher = default_model()
     parser = argparse.ArgumentParser(description="Evaluate student LoRA adapters on held-out samples.")
     parser.add_argument(
         "--dataset",
@@ -85,7 +79,7 @@ def parse_args() -> argparse.Namespace:
         "--teacher-model",
         type=str,
         default=default_teacher,
-        help="Ollama model to compare against (teacher baseline). Defaults to model in .llmrc when present.",
+        help="Ollama model to compare against (teacher baseline). Defaults to model from .llmrc/LLM_MODEL.",
     )
     parser.add_argument(
         "--log-every",
@@ -122,6 +116,59 @@ def call_teacher(prompt: str, model: str) -> str:
 
 def build_prompt(schema_json: str, query: str, current_date: str) -> str:
     return PROMPT_TEMPLATE.format(schema_json=schema_json, query=query, current_date=current_date or "N/A")
+
+
+def grade_with_teacher(schema_json: str, query: str, student_ast: Dict[str, Any], model: str) -> Tuple[bool, str]:
+    """Ask the teacher model to judge if the student's AST satisfies the query."""
+    payload = canonical_json(student_ast)
+    prompt = f"""
+You are the authoritative teacher for a JSON Schema-governed DSL.
+Given the JSON Schema, the user's natural language query, and a candidate AST produced by a student model,
+decide if the candidate AST correctly answers the query while respecting the schema.
+
+Instructions:
+- DO NOT rewrite or correct the AST; only judge it.
+- Require that the AST is semantically consistent with the query (fields, operators, values, timeframe).
+- If the AST misses key intent from the query, or contradicts it, mark it as not good.
+- Respond ONLY with a JSON object of the form:
+  {{"is_good": true/false, "reason": "short justification"}}
+
+[SCHEMA]
+{schema_json}
+[/SCHEMA]
+[QUERY]
+{query}
+[/QUERY]
+[CANDIDATE_AST]
+{payload}
+[/CANDIDATE_AST]
+"""
+    answer = call_teacher(prompt, model)
+    graded = extract_json_block(answer)
+    is_good = bool(graded.get("is_good"))
+    reason = str(graded.get("reason", "") or "")
+    return is_good, reason
+
+
+def semantic_signature(ast: Dict[str, Any]) -> str:
+    """Canonicalize AST semantics (ignores prompt/name/description, sorts conditions)."""
+    normalized = {"timeframe": ast.get("timeframe")}
+    steps = []
+    for step in ast.get("steps") or []:
+        conds = []
+        for cond in step.get("conditions") or []:
+            conds.append(
+                {
+                    "field": cond.get("field"),
+                    "operator": cond.get("operator"),
+                    "value": cond.get("value"),
+                }
+            )
+        conds = sorted(conds, key=lambda c: json.dumps(c, sort_keys=True))
+        steps.append({"conditions": conds})
+    normalized["steps"] = sorted(steps, key=lambda s: json.dumps(s, sort_keys=True))
+    # stringify to make equality checks order-agnostic and cheap
+    return canonical_json(normalized)
 
 
 def evaluate_sample(
@@ -185,6 +232,12 @@ def evaluate_sample(
     except json.JSONDecodeError as exc:
         result["exact_match"] = False
         result["target_error"] = str(exc)
+        
+    # semantic equivalence ignores prompt/name/description ordering and uses condition sets
+    try:
+        result["semantic_match_target"] = semantic_signature(parsed) == semantic_signature(json.loads(sample["ast_json"]))
+    except Exception:
+        result["semantic_match_target"] = False
 
     try:
         validator.validate(parsed)
@@ -193,15 +246,33 @@ def evaluate_sample(
         result["schema_valid"] = False
         result["schema_error"] = str(exc)
 
+    teacher_ok: bool | None = None
     if teacher_model:
         try:
             teacher_out = call_teacher(prompt_text, teacher_model)
             teacher_json = extract_json_block(teacher_out)
             result["teacher_canonical"] = canonical_json(teacher_json)
             result["matches_teacher"] = result["student_canonical"] == result["teacher_canonical"]
+            result["semantic_match_teacher"] = semantic_signature(parsed) == semantic_signature(teacher_json)
+            if result.get("schema_valid"):
+                teacher_ok, reason = grade_with_teacher(sample["schema_json"], sample["query"], parsed, teacher_model)
+                result["teacher_verdict"] = teacher_ok
+                result["teacher_reason"] = reason
         except Exception as exc:  # noqa: BLE001
             result["matches_teacher"] = False
+            result["semantic_match_teacher"] = False
             result["teacher_error"] = str(exc)
+
+    if teacher_ok is not None:
+        result["semantic_pass"] = bool(result.get("schema_valid") and teacher_ok)
+    else:
+        result["semantic_pass"] = bool(
+            result.get("schema_valid")
+            and (
+                result.get("semantic_match_target")
+                or result.get("semantic_match_teacher")
+            )
+        )
 
     return result
 
@@ -212,17 +283,29 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     schema_valid = sum(1 for r in rows if r.get("schema_valid"))
     exact = sum(1 for r in rows if r.get("exact_match"))
     matches_teacher = sum(1 for r in rows if r.get("matches_teacher"))
+    semantic_target = sum(1 for r in rows if r.get("semantic_match_target"))
+    semantic_teacher = sum(1 for r in rows if r.get("semantic_match_teacher"))
+    semantic_pass = sum(1 for r in rows if r.get("semantic_pass"))
+    teacher_verdicts = [r.get("teacher_verdict") for r in rows if "teacher_verdict" in r]
+    teacher_accept = sum(1 for v in teacher_verdicts if v)
     return {
         "total": total,
         "parsed_rate": parsed / total if total else 0.0,
         "schema_valid_rate": schema_valid / total if total else 0.0,
         "exact_match_rate": exact / total if total else 0.0,
         "teacher_agreement_rate": matches_teacher / total if total else 0.0,
+        "semantic_match_target_rate": semantic_target / total if total else 0.0,
+        "semantic_match_teacher_rate": semantic_teacher / total if total else 0.0,
+        "teacher_accept_rate": (teacher_accept / len(teacher_verdicts)) if teacher_verdicts else 0.0,
+        "semantic_pass_rate": semantic_pass / total if total else 0.0,
     }
 
 
 def main() -> None:
     args = parse_args()
+    if not args.teacher_model:
+        raise SystemExit("Teacher model is required; set LLM_MODEL or .llmrc to an ollama model id.")
+
     dataset = load_dataset("json", data_files=str(args.dataset), split="train")
     if not args.include_invalid:
         dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))

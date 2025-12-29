@@ -209,6 +209,35 @@ Target usage:
 * Semantic metrics:
 
   * NL → AST alignment sanity checks for curated test cases.
+  * Teacher adjudication of schema-valid student outputs: the teacher inspects the candidate AST plus schema and query and returns `is_good`/`reason`; an answer only passes if it is schema-valid **and** the teacher confirms it satisfies the query.
+  * Teacher is enabled by default using the local ollama model configured in `.llmrc` (or `LLM_MODEL`); evaluation will fail fast if no teacher is configured.
+
+## CLI reference (all flags, defaults in `config/defaults.json` unless noted)
+
+### Dataset generation
+- `scripts/generate_domain_specs.py`: `--config` defaults JSON; `--prompts` domain prompts JSONL; `--out` specs JSONL; `--model` ollama id (from `.llmrc`/`LLM_MODEL` via `default_model()`); `--seed` for deterministic fallbacks; `--examples-per-schema` query count to request from LLM; `--offline-fallback` to skip ollama and emit stub specs.
+- `scripts/build_schemas.py`: `--config`; `--base-template` base JSON Schema; `--domain-specs` specs JSONL; `--out` final schemas JSONL; `--operator-catalog` pool to sample operators; `--min-operators` / `--max-operators` counts; `--seed` for operator sampling.
+- `scripts/generate_example_queries.py`: `--config`; `--schemas` final schemas JSONL; `--out` schema+queries JSONL; `--per-schema` number of queries per schema; `--model` ollama id; `--offline-fallback` to use deterministic stubs; `--seed` for stubs; `--max-retries` when parsing LLM output.
+- `scripts/generate_dataset.py`: `--config`; `--schemas` final schemas JSONL; `--out` dataset JSONL; `--positives-per-schema` validated samples per schema; `--negative-ratio` negatives per positive; `--seed`.
+- `scripts/build_training_corpus.py`: `--config`; `--dataset` dataset JSONL; `--out` prompt/target JSONL; `--include-invalid` to keep negatives; `--max-samples` optional cap.
+
+### Training and evaluation
+- `scripts/train_student_unsloth.py`: `--config`; `--training-corpus`; `--output-dir`; `--base-model`; `--max-seq-length`; `--batch-size`; `--grad-accum`; `--learning-rate`; `--weight-decay`; `--warmup-steps`; `--num-epochs`; `--max-steps`; `--logging-steps`; `--eval-steps`; `--save-steps`; `--save-total-limit`; `--val-split`; `--max-samples`; `--seed`; `--load-in-4bit`; `--bf16`; `--use-gradient-checkpointing`; `--resume-from-checkpoint`; `--lora-r`; `--lora-alpha`; `--lora-dropout`; `--eval-max-samples`.
+- `scripts/evaluate_student.py`: `--dataset`; `--adapter`; `--base-model`; `--max-seq-length`; `--max-new-tokens`; `--max-samples`; `--include-invalid`; `--temperature`; `--top-p`; `--load-in-4bit`; `--out-dir`; `--teacher-model` (required, defaults to `.llmrc`/`LLM_MODEL` via `default_model()`); `--log-every`.
+- `scripts/report_training.py`: `--training-metrics`; `--eval-summary`; `--eval-results`; `--run-config`; `--out-dir`; `--report-name`.
+
+### Teacher sanity checks
+- `scripts/test_teacher.py`: `--training-corpus`; `--model` ollama id (default `.llmrc`/`LLM_MODEL`); `--max-samples`.
+- `scripts/test_inference_teacher.py`: `--schema-id`; `--prompt`; `--schema-source` schemas JSONL; `--model` ollama id (default `.llmrc`/`LLM_MODEL`); `--current-date` ISO date for prompt context.
+
+### Utilities
+- `scripts/pretty_jsonl.py`: `--input` JSONL; `--out` prettified JSON; `--limit` cap records.
+
+### Convenience runners
+- `runDatasetGeneration.sh`: `--model` ollama id override for dataset steps; `--config` defaults JSON path.
+- `runTraining.sh`: accepts `-h/--help`, otherwise forwards all args to `scripts/train_student_unsloth.py` after `uv sync`.
+- `runEvals.sh`: accepts `--out-dir` (eval output root), `--adapter` (LoRA checkpoint dir), `-h/--help`; forwards other args to `scripts/evaluate_student.py`, then builds a report.
+- `runAll.sh`: `--model` (passes to dataset generation), `--config`, `--with-training`, `--with-evals`; runs dataset generation always, optional training/evals.
 
 ## 4. Canonicalization & Normalization
 
