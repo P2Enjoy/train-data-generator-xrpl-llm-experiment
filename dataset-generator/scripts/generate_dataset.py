@@ -14,12 +14,18 @@ from typing import Any, Dict, Iterable, List, Tuple
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
 
-OPERATORS = ["equals", "not_equals", "like", "in"]
+DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
 OP_PHRASES = {
     "equals": "is",
     "not_equals": "is not",
     "like": "mentions",
     "in": "is in",
+    "not_in": "is not in",
+    "contains": "contains",
+    "starts_with": "starts with",
+    "ends_with": "ends with",
+    "gt": "after",
+    "lt": "before",
 }
 
 
@@ -80,6 +86,26 @@ def canonical(obj: Dict[str, Any]) -> str:
     return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)
 
 
+def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:
+    ops: List[str] = []
+    raw_ops = entry.get("operators") or []
+    if raw_ops:
+        for op in raw_ops:
+            if isinstance(op, dict) and "const" in op:
+                ops.append(str(op["const"]))
+            elif isinstance(op, str):
+                ops.append(op)
+    if not ops:
+        try:
+            one_of = (
+                entry["schema"]["properties"]["steps"]["items"]["properties"]["conditions"]["items"]["properties"]["operator"]["oneOf"]
+            )
+            ops = [str(item["const"]) for item in one_of if isinstance(item, dict) and "const" in item]
+        except Exception:  # noqa: BLE001
+            ops = []
+    return ops or DEFAULT_OPERATORS
+
+
 def format_error(error: ValidationError | None) -> str | None:
     if error is None:
         return None
@@ -109,9 +135,29 @@ def choose_value(field: Dict[str, Any], rng: random.Random) -> Any:
     return rng.choice(free_text)
 
 
-def build_conditions(fields: List[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
+def pick_invalid_operator(allowed: List[str], rng: random.Random) -> str:
+    candidates = [
+        "unsupported_operator",
+        "invalid_op",
+        "regex",
+        "between",
+        "approx",
+        "any_of",
+        "none",
+        "greater_or_equal",
+    ]
+    pool = candidates + [f"op_{rng.randint(1, 999)}" for _ in range(4)]
+    choice = rng.choice(pool)
+    while choice in allowed:
+        choice = rng.choice(pool)
+    return choice
+
+
+def build_conditions(fields: List[Dict[str, Any]], operators: List[str], rng: random.Random) -> List[Dict[str, Any]]:
     if not fields:
         raise ValueError("No fields available to build conditions.")
+    if not operators:
+        raise ValueError("No operators available to build conditions.")
     count = min(len(fields), max(1, rng.randint(1, 3)))
     selected = rng.sample(fields, k=count)
     conditions = []
@@ -119,7 +165,7 @@ def build_conditions(fields: List[Dict[str, Any]], rng: random.Random) -> List[D
         conditions.append(
             {
                 "field": field["const"],
-                "operator": rng.choice(OPERATORS),
+                "operator": rng.choice(operators),
                 "value": choose_value(field, rng),
             }
         )
@@ -171,12 +217,13 @@ def build_query(
 def make_positive_sample(
     entry: Dict[str, Any],
     validator: Draft7Validator,
+    operators: List[str],
     rng: random.Random,
     current_date: date,
     attempts: int = 6,
 ) -> Tuple[str, Dict[str, Any]]:
     for _ in range(attempts):
-        conditions = build_conditions(entry["fields"], rng)
+        conditions = build_conditions(entry["fields"], operators, rng)
         timeframe = sample_timeframe(rng, current_date)
         query = build_query(entry, conditions, timeframe, current_date, rng)
         ast = {
@@ -198,6 +245,7 @@ def make_positive_sample(
 def mutate_ast(
     ast: Dict[str, Any],
     entry: Dict[str, Any],
+    operators: List[str],
     rng: random.Random,
 ) -> Tuple[Dict[str, Any], str]:
     mutated = copy.deepcopy(ast)
@@ -230,7 +278,7 @@ def mutate_ast(
     if mutation == "unknown_field":
         mutated["steps"][0]["conditions"][0]["field"] = f"{entry['schema_id']}.unexpected"
     elif mutation == "wrong_operator":
-        mutated["steps"][0]["conditions"][0]["operator"] = "gt"
+        mutated["steps"][0]["conditions"][0]["operator"] = pick_invalid_operator(operators, rng)
     elif mutation == "missing_description":
         if mutated["steps"]:
             mutated["steps"][0].pop("description", None)
@@ -257,17 +305,19 @@ def ensure_invalid(
 def build_positive_records(
     entry: Dict[str, Any],
     validator: Draft7Validator,
+    operators: List[str],
     rng: random.Random,
     current_date: date,
     count: int,
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     for _ in range(count):
-        query, ast = make_positive_sample(entry, validator, rng, current_date)
+        query, ast = make_positive_sample(entry, validator, operators, rng, current_date)
         records.append(
             {
                 "schema_id": entry["schema_id"],
                 "domain": entry.get("domain"),
+                "operators": operators,
                 "schema_json": entry["schema_json"],
                 "query": query,
                 "current_date": current_date.isoformat(),
@@ -284,6 +334,7 @@ def build_positive_records(
 def build_negative_records(
     entry: Dict[str, Any],
     validator: Draft7Validator,
+    operators: List[str],
     rng: random.Random,
     positives: List[Dict[str, Any]],
     target_count: int,
@@ -294,12 +345,13 @@ def build_negative_records(
 
     while len(negatives) < target_count:
         base = rng.choice(positives)
-        mutated, mutation = mutate_ast(base["_ast"], entry, rng)
+        mutated, mutation = mutate_ast(base["_ast"], entry, operators, rng)
         mutated, mutation, error = ensure_invalid(validator, mutated, mutation)
         negatives.append(
             {
                 "schema_id": entry["schema_id"],
                 "domain": entry.get("domain"),
+                "operators": operators,
                 "schema_json": entry["schema_json"],
                 "query": base["query"],
                 "current_date": base.get("current_date"),
@@ -323,10 +375,11 @@ def main() -> None:
         if not entry.get("fields"):
             print(f"[warn] skipping {entry.get('schema_id')} because no fields were provided")
             continue
+        operators = extract_operator_consts(entry)
         validator = Draft7Validator(entry["schema"])
-        positives = build_positive_records(entry, validator, rng, current_date, args.positives_per_schema)
+        positives = build_positive_records(entry, validator, operators, rng, current_date, args.positives_per_schema)
         negative_target = int(math.ceil(len(positives) * args.negative_ratio))
-        negatives = build_negative_records(entry, validator, rng, positives, negative_target)
+        negatives = build_negative_records(entry, validator, operators, rng, positives, negative_target)
 
         for record in positives:
             record.pop("_ast", None)

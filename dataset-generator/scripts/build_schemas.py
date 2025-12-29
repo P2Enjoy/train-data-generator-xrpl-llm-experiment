@@ -1,10 +1,11 @@
-"""Inject domain fields/enums into the base JSON Schema template."""
+"""Inject domain fields/enums/operators into the base JSON Schema template."""
 
 from __future__ import annotations
 
 import argparse
 import copy
 import json
+import random
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -28,6 +29,30 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("outputs/final_schemas.jsonl"),
         help="Where to write JSONL with full schemas.",
+    )
+    parser.add_argument(
+        "--operator-catalog",
+        type=Path,
+        default=Path("data/operator_catalog.json"),
+        help="JSON array of operator const/description pairs to sample from.",
+    )
+    parser.add_argument(
+        "--min-operators",
+        type=int,
+        default=4,
+        help="Minimum operator count to include in each schema.",
+    )
+    parser.add_argument(
+        "--max-operators",
+        type=int,
+        default=7,
+        help="Maximum operator count to include in each schema.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=17,
+        help="Seed for deterministic operator sampling.",
     )
     return parser.parse_args()
 
@@ -59,6 +84,44 @@ def canonical(obj: Dict[str, Any]) -> str:
     return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)
 
 
+def normalize_operators(operators: Any) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    if not isinstance(operators, list):
+        return normalized
+    for op in operators:
+        if isinstance(op, dict) and "const" in op:
+            normalized.append({"const": str(op["const"]), "description": str(op.get("description", ""))})
+        elif isinstance(op, str):
+            normalized.append({"const": op, "description": ""})
+    return normalized
+
+
+def load_operator_catalog(path: Path) -> List[Dict[str, str]]:
+    operators = normalize_operators(load_json(path))
+    if not operators:
+        raise ValueError(f"No valid operators found in {path}")
+    return operators
+
+
+def choose_operators(
+    spec: Dict[str, Any],
+    catalog: List[Dict[str, str]],
+    rng: random.Random,
+    min_count: int,
+    max_count: int,
+) -> List[Dict[str, str]]:
+    # Honor explicitly provided operators on the spec if present.
+    explicit = normalize_operators(spec.get("operators"))
+    if explicit:
+        return explicit
+
+    max_available = len(catalog)
+    lower = max(1, min(min_count, max_available))
+    upper = max(lower, min(max_count, max_available))
+    count = rng.randint(lower, upper)
+    return rng.sample(catalog, k=count)
+
+
 def build_field_one_of(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for field in fields:
@@ -82,7 +145,7 @@ def build_enum_rules(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rules
 
 
-def build_schema(spec: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, Any]:
+def build_schema(spec: Dict[str, Any], template: Dict[str, Any], operators: List[Dict[str, str]]) -> Dict[str, Any]:
     schema = copy.deepcopy(template)
     schema["$id"] = spec["schema_id"]
     schema["title"] = f"{spec['domain']} funnel definition"
@@ -96,24 +159,29 @@ def build_schema(spec: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, An
 
     fields = spec.get("fields", [])
     condition_schema["properties"]["field"]["oneOf"] = build_field_one_of(fields)
+    condition_schema["properties"]["operator"]["oneOf"] = operators
     condition_schema["allOf"] = build_enum_rules(fields)
     return schema
 
 
 def main() -> None:
     args = parse_args()
+    rng = random.Random(args.seed)
     template = load_json(args.base_template)
     specs = load_jsonl(args.domain_specs)
+    operator_catalog = load_operator_catalog(args.operator_catalog)
 
     built = []
     for spec in specs:
-        schema = build_schema(spec, template)
+        operators = choose_operators(spec, operator_catalog, rng, args.min_operators, args.max_operators)
+        schema = build_schema(spec, template, operators)
         built.append(
             {
                 "schema_id": spec["schema_id"],
                 "domain": spec.get("domain"),
                 "description": spec.get("description"),
                 "fields": spec.get("fields", []),
+                "operators": operators,
                 "example_queries": spec.get("example_queries", []),
                 "schema": schema,
                 "schema_json": canonical(schema),

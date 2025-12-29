@@ -15,6 +15,7 @@ from model_config import default_model
 
 
 OLLAMA_MODEL = default_model()
+DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,6 +82,26 @@ def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
             handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
+def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:
+    ops: List[str] = []
+    raw_ops = entry.get("operators") or []
+    if raw_ops:
+        for op in raw_ops:
+            if isinstance(op, dict) and "const" in op:
+                ops.append(str(op["const"]))
+            elif isinstance(op, str):
+                ops.append(op)
+    if not ops:
+        try:
+            one_of = (
+                entry["schema"]["properties"]["steps"]["items"]["properties"]["conditions"]["items"]["properties"]["operator"]["oneOf"]
+            )
+            ops = [str(item["const"]) for item in one_of if isinstance(item, dict) and "const" in item]
+        except Exception:  # noqa: BLE001
+            ops = []
+    return ops or DEFAULT_OPERATORS
+
+
 def extract_json_array(text: str) -> List[str]:
     def clean_output(chunk: str) -> str:
         chunk = chunk.strip()
@@ -116,9 +137,10 @@ def extract_json_array(text: str) -> List[str]:
     raise ValueError("No JSON array found in LLM output")
 
 
-def build_prompt(entry: Dict[str, Any], count: int) -> str:
+def build_prompt(entry: Dict[str, Any], count: int, operators: List[str]) -> str:
     fields = entry.get("fields", [])
     field_lines = "\n".join(f"- {field['const']}: {field.get('description', '')}" for field in fields)
+    operator_lines = "\n".join(f"- {op}" for op in operators)
     return textwrap.dedent(
         f"""
         You are generating natural language user queries (EN or FR) for a funnel DSL.
@@ -126,8 +148,10 @@ def build_prompt(entry: Dict[str, Any], count: int) -> str:
         Domain: {entry.get('domain')}
         Fields:
         {field_lines or '- None provided'}
+        Operators:
+        {operator_lines or '- None provided'}
 
-        Produce exactly {count} short, diverse natural language queries that reference the above fields and rely on operators equals / not_equals / like / in.
+        Produce exactly {count} short, diverse natural language queries that reference the above fields and rely on the operator names listed above.
         Return ONLY a JSON array of strings (no object, no extra keys).
         """
     ).strip()
@@ -148,20 +172,22 @@ def call_ollama(prompt: str, model: str) -> str:
 
 def stub_queries(entry: Dict[str, Any], count: int, rng: random.Random) -> List[str]:
     fields = entry.get("fields", [])
+    operators = extract_operator_consts(entry)
     if not fields:
         return [f"{entry.get('domain', 'domain').title()} sample query {i+1}" for i in range(count)]
     queries = []
     for i in range(count):
         field = rng.choice(fields)
-        operator = rng.choice(["equals", "not_equals", "like"])
+        operator = rng.choice(operators)
         queries.append(f"{entry.get('domain', 'Domain')} where {field['const']} {operator} sample_value_{i+1}")
     return queries
 
 
 def generate_queries(entry: Dict[str, Any], args: argparse.Namespace, rng: random.Random) -> List[str]:
+    operators = extract_operator_consts(entry)
     if args.offline_fallback:
         return stub_queries(entry, args.per_schema, rng)
-    prompt = build_prompt(entry, args.per_schema)
+    prompt = build_prompt(entry, args.per_schema, operators)
     attempts = 0
     parsed: List[str] | None = None
     while parsed is None and attempts <= args.max_retries:

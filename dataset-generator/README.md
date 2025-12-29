@@ -346,8 +346,10 @@ python scripts/generate_domain_specs.py \
 python scripts/build_schemas.py \
   --domain-specs outputs/d_01_domain_specs.jsonl \
   --base-template data/base_schema_template.json \
+  --operator-catalog data/operator_catalog.json \
   --out outputs/d_02_final_schemas.jsonl
 ```
+`build_schemas.py` also samples a per-schema operator set (defaults to 4–7) from `data/operator_catalog.json` so each schema exposes a slightly different operator vocabulary. Set `--min-operators` / `--max-operators` / `--seed` to control that spread.
 
 3) Example queries for each generated schema (LLM-generated, EN/FR mix):
 ```bash
@@ -366,6 +368,7 @@ python scripts/generate_dataset.py \
   --positives-per-schema 8 \
   --negative-ratio 0.4
 ```
+Operators in each AST are sampled from the schema-specific operator list so the student model must pay attention to the allowed operator vocabulary per schema; negatives include unsupported operator mutations.
 
 5) Training text export (canonical prompt/target pairs):
 ```bash
