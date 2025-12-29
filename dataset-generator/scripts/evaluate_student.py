@@ -1,0 +1,259 @@
+"""Evaluate Gemma 3 270M student adapters against the generated dataset."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import torch
+from datasets import load_dataset
+from jsonschema import Draft7Validator
+from peft import PeftModel
+from unsloth import FastModel
+from unsloth.chat_templates import get_chat_template
+
+PROMPT_TEMPLATE = """You are a JSON AST generator.
+You must output a single JSON object that satisfies the following JSON Schema
+and represents the program matching the user request.
+
+[SCHEMA]
+{schema_json}
+[/SCHEMA]
+
+[QUERY]
+{query}
+[/QUERY]
+
+[CURRENT_DATE]
+{current_date}
+[/CURRENT_DATE]
+
+[OUTPUT]
+"""
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate student LoRA adapters on held-out samples.")
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path("outputs/d_04_dataset.jsonl"),
+        help="JSONL produced by generate_dataset.py.",
+    )
+    parser.add_argument(
+        "--adapter",
+        type=Path,
+        default=Path("outputs/student_runs/gemma3-270m/checkpoint-final"),
+        help="Path to the saved LoRA adapter directory.",
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default="unsloth/gemma-3-270m-it",
+        help="Base model id used during training.",
+    )
+    parser.add_argument("--max-seq-length", type=int, default=2048, help="Max sequence length.")
+    parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens to generate.")
+    parser.add_argument("--max-samples", type=int, default=200, help="How many rows to evaluate.")
+    parser.add_argument("--include-invalid", action="store_true", help="Include invalid targets during eval.")
+    parser.add_argument("--temperature", type=float, default=0.2, help="Generation temperature.")
+    parser.add_argument("--top-p", type=float, default=0.9, help="Generation top-p.")
+    parser.add_argument("--load-in-4bit", action="store_true", help="Load student in 4-bit for eval.")
+    parser.add_argument("--out-dir", type=Path, default=Path("outputs/student_runs/eval"), help="Where to store logs.")
+    parser.add_argument(
+        "--teacher-model",
+        type=str,
+        default=None,
+        help="Optional Ollama model to compare against (teacher baseline).",
+    )
+    return parser.parse_args()
+
+
+def load_student(
+    base_model: str, adapter_dir: Path, max_seq_length: int, load_in_4bit: bool
+) -> Tuple[Any, Any]:
+    model, tokenizer = FastModel.from_pretrained(
+        model_name=base_model,
+        max_seq_length=max_seq_length,
+        load_in_4bit=load_in_4bit,
+        load_in_8bit=False,
+        full_finetuning=False,
+    )
+    tokenizer = get_chat_template(tokenizer, chat_template="gemma3")
+    model = PeftModel.from_pretrained(model, adapter_dir)
+    model.eval()
+    return model, tokenizer
+
+
+def extract_json_block(text: str) -> Dict[str, Any]:
+    cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if not match:
+        raise ValueError("No JSON object found in model output")
+    return json.loads(match.group(0))
+
+
+def canonical(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)
+
+
+def call_teacher(prompt: str, model: str) -> str:
+    result = subprocess.run(
+        ["ollama", "run", model],
+        input=prompt,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Ollama returned {result.returncode}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def build_prompt(schema_json: str, query: str, current_date: str) -> str:
+    return PROMPT_TEMPLATE.format(schema_json=schema_json, query=query, current_date=current_date or "N/A")
+
+
+def evaluate_sample(
+    sample: Dict[str, Any],
+    model,
+    tokenizer,
+    validator: Draft7Validator,
+    temperature: float,
+    top_p: float,
+    max_new_tokens: int,
+    teacher_model: str | None = None,
+) -> Dict[str, Any]:
+    prompt_text = build_prompt(sample["schema_json"], sample["query"], sample.get("current_date", ""))
+    messages = [
+        {"role": "system", "content": "You are a JSON AST generator."},
+        {"role": "user", "content": prompt_text},
+    ]
+    chat_prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    ).removeprefix("<bos>")
+
+    inputs = tokenizer(chat_prompt, return_tensors="pt")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    model = model.to(device)
+
+    with torch.inference_mode():
+        generated = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            do_sample=True,
+        )
+
+    gen_ids = generated[0][inputs["input_ids"].shape[1] :]
+    decoded = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
+    result: Dict[str, Any] = {
+        "schema_id": sample.get("schema_id"),
+        "query": sample["query"],
+        "target_valid": sample.get("is_valid", True),
+        "raw_output": decoded,
+    }
+
+    try:
+        parsed = extract_json_block(decoded)
+        result["parsed"] = True
+    except Exception as exc:  # noqa: BLE001
+        result["parsed"] = False
+        result["parse_error"] = str(exc)
+        return result
+
+    result["student_canonical"] = canonical(parsed)
+    try:
+        target = json.loads(sample["ast_json"])
+        result["target_canonical"] = canonical(target)
+        result["exact_match"] = result["student_canonical"] == result["target_canonical"]
+    except json.JSONDecodeError as exc:
+        result["exact_match"] = False
+        result["target_error"] = str(exc)
+
+    try:
+        validator.validate(parsed)
+        result["schema_valid"] = True
+    except Exception as exc:  # noqa: BLE001
+        result["schema_valid"] = False
+        result["schema_error"] = str(exc)
+
+    if teacher_model:
+        try:
+            teacher_out = call_teacher(prompt_text, teacher_model)
+            teacher_json = extract_json_block(teacher_out)
+            result["teacher_canonical"] = canonical(teacher_json)
+            result["matches_teacher"] = result["student_canonical"] == result["teacher_canonical"]
+        except Exception as exc:  # noqa: BLE001
+            result["matches_teacher"] = False
+            result["teacher_error"] = str(exc)
+
+    return result
+
+
+def write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+
+def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(rows)
+    parsed = sum(1 for r in rows if r.get("parsed"))
+    schema_valid = sum(1 for r in rows if r.get("schema_valid"))
+    exact = sum(1 for r in rows if r.get("exact_match"))
+    matches_teacher = sum(1 for r in rows if r.get("matches_teacher"))
+    return {
+        "total": total,
+        "parsed_rate": parsed / total if total else 0.0,
+        "schema_valid_rate": schema_valid / total if total else 0.0,
+        "exact_match_rate": exact / total if total else 0.0,
+        "teacher_agreement_rate": matches_teacher / total if total else 0.0,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    dataset = load_dataset("json", data_files=str(args.dataset), split="train")
+    if not args.include_invalid:
+        dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))
+    if args.max_samples and len(dataset) > args.max_samples:
+        dataset = dataset.select(range(args.max_samples))
+
+    model, tokenizer = load_student(args.base_model, args.adapter, args.max_seq_length, args.load_in_4bit)
+    results: List[Dict[str, Any]] = []
+
+    for sample in dataset:
+        schema = json.loads(sample["schema_json"])
+        validator = Draft7Validator(schema)
+        result = evaluate_sample(
+            sample,
+            model,
+            tokenizer,
+            validator,
+            args.temperature,
+            args.top_p,
+            args.max_new_tokens,
+            teacher_model=args.teacher_model,
+        )
+        results.append(result)
+
+    summary = summarize(results)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(args.out_dir / "evaluation_results.jsonl", results)
+    (args.out_dir / "evaluation_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()

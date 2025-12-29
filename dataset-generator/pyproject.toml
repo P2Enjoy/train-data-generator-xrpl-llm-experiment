@@ -5,11 +5,22 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate",
+    "datasets",
+    "evaluate",
     "flash-attn",
     "jsonschema",
+    "matplotlib",
+    "pandas",
+    "peft",
+    "seaborn",
+    "sentencepiece",
     "torch",
     "torchaudio",
+    "transformers==4.56.2",
     "triton",
+    "trl==0.22.2",
+    "unsloth",
 ]
 
 [tool.uv.sources]

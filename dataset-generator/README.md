@@ -412,3 +412,22 @@ uv run python scripts/test_inference_teacher.py \
 ```
 
 Use this script to sanity-check a single NL request before adding it to your dataset or training loops.
+
+## Student training – Gemma 3 270M (Unsloth)
+
+Fine-tune a small student on the generated corpus using Unsloth LoRA adapters, then evaluate and report:
+
+- Install deps (Unsloth, TRL, Transformers): `UV_CACHE_DIR=.uv-cache uv sync`
+- Train: `./runTraining.sh --training-corpus outputs/d_05_training_corpus.jsonl --output-dir outputs/student_runs/gemma3-270m`
+- Evaluate the saved adapter on valid samples (optionally compare to the Ollama teacher):  
+  `./runEvals.sh --adapter outputs/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b`
+- Build plots + Markdown summary (auto-run by `runEvals.sh`): `./runEvals.sh`
+
+## Runner scripts
+
+- `runDatasetGeneration.sh [--model MODEL]` → steps 1–5 (domain specs → training corpus) with prettified outputs.  
+- `runTraining.sh [train_student_unsloth.py args…]` → LoRA fine-tune Gemma-3-270M student.  
+- `runEvals.sh [evaluate_student.py args…]` → evaluate student (and optional teacher comparison) then generate report.  
+- `runAll.sh [--model MODEL] [--with-training] [--with-evals]` → wrapper that calls the above in order.  
+
+To avoid permission issues, the runners set `UV_CACHE_DIR=${UV_CACHE_DIR:-.uv-cache}`; override it if you prefer a different cache location.
