@@ -6,6 +6,7 @@ import json
 import importlib
 from pathlib import Path
 from typing import Any, Dict, Tuple
+from contextlib import nullcontext
 
 import _bootstrap  # noqa: F401
 import torch
@@ -59,6 +60,8 @@ SYSTEM_PROMPT = (
 
 DEFAULT_BASE_MODEL = "unsloth/gemma-3-270m-it"
 DEFAULT_OUTPUT_DIR = Path("outputs/student_runs/gemma3-270m")
+GEMMA3_INSTRUCTION_PART = "<start_of_turn>user\n"
+GEMMA3_RESPONSE_PART = "<start_of_turn>model\n"
 
 
 def parse_args() -> argparse.Namespace:
@@ -185,6 +188,7 @@ def load_corpus(
     seed: int,
     max_samples: int | None,
     eval_max_samples: int,
+    max_seq_length: int,
 ) -> Tuple[Any, Any]:
     dataset = load_dataset("json", data_files=str(path), split="train")
     if max_samples:
@@ -197,7 +201,16 @@ def load_corpus(
             {"role": "assistant", "content": sample["completion"]},
         ]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        return {"text": text.removeprefix("<bos>")}
+        text = text.removeprefix("<bos>")
+
+        marker_pos = text.rfind(GEMMA3_RESPONSE_PART)
+        keep = False
+        if marker_pos != -1:
+            prefix = text[: marker_pos + len(GEMMA3_RESPONSE_PART)]
+            prefix_len = len(tokenizer(prefix, add_special_tokens=False)["input_ids"])
+            keep = prefix_len < max_seq_length  # ensure at least one response token survives truncation
+
+        return {"text": text, "_keep": keep}
 
     if val_split > 0:
         split = dataset.train_test_split(test_size=val_split, seed=seed)
@@ -210,8 +223,23 @@ def load_corpus(
         eval_set = None
 
     train_set = train_set.map(format_row, remove_columns=train_set.column_names)
+    train_len_before = len(train_set)
+    train_set = train_set.filter(lambda x: bool(x["_keep"]))
+    train_dropped = train_len_before - len(train_set)
+    train_set = train_set.remove_columns("_keep")
+
+    eval_dropped = 0
     if eval_set is not None:
         eval_set = eval_set.map(format_row, remove_columns=eval_set.column_names)
+        eval_len_before = len(eval_set)
+        eval_set = eval_set.filter(lambda x: bool(x["_keep"]))
+        eval_dropped = eval_len_before - len(eval_set)
+        eval_set = eval_set.remove_columns("_keep")
+
+    if train_dropped:
+        print(f"[data] dropped {train_dropped} train samples with responses truncated before token budget {max_seq_length}")
+    if eval_dropped:
+        print(f"[data] dropped {eval_dropped} eval samples with responses truncated before token budget {max_seq_length}")
     return train_set, eval_set
 
 
@@ -246,6 +274,59 @@ def save_run_config(path: Path, args: argparse.Namespace, train_len: int, eval_l
     }
     config.update({"train_samples": train_len, "eval_samples": eval_len or 0})
     path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
+def sanity_check_eval_batch(trainer: SFTTrainer) -> None:
+    """Run a quick eval batch to catch NaN/empty-label issues before training."""
+    eval_dataset = getattr(trainer, "eval_dataset", None)
+    if eval_dataset is None or len(eval_dataset) == 0:
+        print("[sanity] skipping eval batch check: no eval dataset")
+        return
+
+    dataloader = trainer.get_eval_dataloader()
+    try:
+        batch = next(iter(dataloader))
+    except StopIteration:
+        print("[sanity] skipping eval batch check: empty eval dataloader")
+        return
+
+    batch = trainer._prepare_inputs(batch)  # move to device just like real eval
+    for key, value in batch.items():
+        if torch.is_tensor(value) and (torch.isnan(value).any() or torch.isinf(value).any()):
+            raise ValueError(f"Found NaN/Inf in eval batch tensor '{key}'")
+
+    labels = batch.get("labels")
+    if labels is None:
+        raise ValueError("Eval batch is missing labels")
+    if labels.numel() == 0:
+        raise ValueError("Eval batch labels tensor is empty")
+
+    valid_per_sample = (labels != -100).view(labels.shape[0], -1).sum(dim=1)
+    if (valid_per_sample == 0).any():
+        raise ValueError("Eval batch has samples with zero supervised tokens (all labels are -100)")
+
+    was_training = trainer.model.training
+    trainer.model.eval()
+    use_cuda = torch.cuda.is_available()
+    autocast_dtype = torch.bfloat16 if getattr(trainer.args, "bf16", False) else torch.float16
+    enable_autocast = use_cuda and (getattr(trainer.args, "bf16", False) or getattr(trainer.args, "fp16", False))
+    autocast_ctx = (
+        torch.amp.autocast(device_type="cuda", dtype=autocast_dtype) if enable_autocast else nullcontext()
+    )
+
+    with torch.no_grad(), autocast_ctx:
+        outputs = trainer.model(**batch)
+    if was_training:
+        trainer.model.train()
+
+    loss = getattr(outputs, "loss", None)
+    if loss is None or not torch.isfinite(loss):
+        raise ValueError(f"Eval loss is invalid: {loss}")
+
+    print(
+        f"[sanity] eval batch loss is finite: {loss.item():.4f}; "
+        f"min supervised tokens per sample={valid_per_sample.min().item()}"
+    )
 
 
 def main() -> None:
@@ -287,6 +368,7 @@ def main() -> None:
         args.seed,
         args.max_samples,
         args.eval_max_samples,
+        args.max_seq_length,
     )
     print(
         f"[data] train samples={len(train_set)}"
@@ -327,9 +409,14 @@ def main() -> None:
     )
     trainer = train_on_responses_only(
         trainer,
-        instruction_part="<start_of_turn>user\n",
-        response_part="<start_of_turn>model\n",
+        instruction_part=GEMMA3_INSTRUCTION_PART,
+        response_part=GEMMA3_RESPONSE_PART,
     )
+    try:
+        sanity_check_eval_batch(trainer)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"[sanity] Eval batch check failed: {exc}") from exc
+
     effective_bs = args.batch_size * args.grad_accum
     print(
         f"[config] base_model={args.base_model} 4bit={args.load_in_4bit} bf16={args.bf16} "
