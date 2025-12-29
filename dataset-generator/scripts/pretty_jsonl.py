@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable, List
+
+import _bootstrap  # noqa: F401
+from lib.io import load_jsonl
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,19 +31,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional limit on records to include.",
     )
     return parser.parse_args()
-
-
-def load_jsonl(path: Path, limit: int | None = None) -> List[dict]:
-    records: List[dict] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-            if limit and len(records) >= limit:
-                break
-    return records
 
 
 def main() -> None:

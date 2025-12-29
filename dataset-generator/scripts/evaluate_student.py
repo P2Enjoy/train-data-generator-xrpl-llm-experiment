@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import _bootstrap  # noqa: F401
 import torch
 from datasets import load_dataset
 from jsonschema import Draft7Validator
 from peft import PeftModel
 from unsloth import FastModel
 from unsloth.chat_templates import get_chat_template
+
+from lib.io import canonical_json, write_jsonl
+from lib.llm import run_ollama
+from lib.parsing import extract_json_object
 
 PROMPT_TEMPLATE = """You are a JSON AST generator.
 You must output a single JSON object that satisfies the following JSON Schema
@@ -90,28 +93,11 @@ def load_student(
 
 
 def extract_json_block(text: str) -> Dict[str, Any]:
-    cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if not match:
-        raise ValueError("No JSON object found in model output")
-    return json.loads(match.group(0))
-
-
-def canonical(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)
+    return extract_json_object(text)
 
 
 def call_teacher(prompt: str, model: str) -> str:
-    result = subprocess.run(
-        ["ollama", "run", model],
-        input=prompt,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Ollama returned {result.returncode}: {result.stderr.strip()}")
-    return result.stdout.strip()
+    return run_ollama(prompt, model)
 
 
 def build_prompt(schema_json: str, query: str, current_date: str) -> str:
@@ -171,14 +157,14 @@ def evaluate_sample(
         result["parse_error"] = str(exc)
         return result
 
-    result["student_canonical"] = canonical(parsed)
-    try:
-        target = json.loads(sample["ast_json"])
-        result["target_canonical"] = canonical(target)
-        result["exact_match"] = result["student_canonical"] == result["target_canonical"]
-    except json.JSONDecodeError as exc:
-        result["exact_match"] = False
-        result["target_error"] = str(exc)
+        result["student_canonical"] = canonical_json(parsed)
+        try:
+            target = json.loads(sample["ast_json"])
+            result["target_canonical"] = canonical_json(target)
+            result["exact_match"] = result["student_canonical"] == result["target_canonical"]
+        except json.JSONDecodeError as exc:
+            result["exact_match"] = False
+            result["target_error"] = str(exc)
 
     try:
         validator.validate(parsed)
@@ -191,20 +177,13 @@ def evaluate_sample(
         try:
             teacher_out = call_teacher(prompt_text, teacher_model)
             teacher_json = extract_json_block(teacher_out)
-            result["teacher_canonical"] = canonical(teacher_json)
+            result["teacher_canonical"] = canonical_json(teacher_json)
             result["matches_teacher"] = result["student_canonical"] == result["teacher_canonical"]
         except Exception as exc:  # noqa: BLE001
             result["matches_teacher"] = False
             result["teacher_error"] = str(exc)
 
     return result
-
-
-def write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row) + "\n")
 
 
 def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:

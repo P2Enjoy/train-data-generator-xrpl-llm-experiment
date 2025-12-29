@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List
 
+import _bootstrap  # noqa: F401
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+
+from lib.io import load_jsonl
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,17 +53,6 @@ def parse_args() -> argparse.Namespace:
         help="Filename for the generated Markdown report.",
     )
     return parser.parse_args()
-
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
 
 
 def plot_training_curves(df: pd.DataFrame, out_dir: Path) -> List[Path]:

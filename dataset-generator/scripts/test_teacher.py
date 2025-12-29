@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
-import re
-import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import List
 
+import _bootstrap  # noqa: F401
+from lib.io import canonical_json, load_jsonl
+from lib.llm import run_ollama
+from lib.parsing import extract_json_object
 from model_config import default_model
 
 DEFAULT_MODEL = default_model()
@@ -38,43 +40,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    if not path.exists():
-        raise FileNotFoundError(f"{path} not found")
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
-
-
 def call_model(prompt: str, model: str) -> str:
-    result = subprocess.run(
-        ["ollama", "run", model],
-        input=prompt,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ollama failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+    return run_ollama(prompt, model)
 
 
 def extract_json(text: str) -> Any:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        raise ValueError("No JSON object found in output")
-    return json.loads(match.group(0))
-
-
-def canonical(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)
+    return extract_json_object(text)
 
 
 def print_diff(expected: str, actual: str) -> None:
@@ -91,6 +62,8 @@ def print_diff(expected: str, actual: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    if not args.training_corpus.exists():
+        raise FileNotFoundError(f"{args.training_corpus} not found")
     records = load_jsonl(args.training_corpus)
     for idx, sample in enumerate(records[: args.max_samples], start=1):
         print(f"\nSample {idx}/{min(args.max_samples, len(records))}: {sample['schema_id']}")
@@ -115,9 +88,9 @@ def main() -> None:
             continue
 
         print("LLM output:")
-        print(canonical(parsed))
+        print(canonical_json(parsed))
         print("Target completion:")
-        print(canonical(target))
+        print(canonical_json(target))
 
         if parsed == target:
             print("[ok] exact match")

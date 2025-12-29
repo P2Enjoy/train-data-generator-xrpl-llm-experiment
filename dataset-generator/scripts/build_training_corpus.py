@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
+
+import _bootstrap  # noqa: F401
+from lib.io import load_jsonl, write_jsonl
 
 
 PROMPT_TEMPLATE = """You are a JSON AST generator.
@@ -54,24 +56,6 @@ def parse_args() -> argparse.Namespace:
         help="Optional limit on how many samples to export.",
     )
     return parser.parse_args()
-
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
-
-
-def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
 def build_prompt(schema_json: str, query: str, current_date: str | None) -> str:

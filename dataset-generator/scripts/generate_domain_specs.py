@@ -6,11 +6,14 @@ import argparse
 import json
 import random
 import re
-import subprocess
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
+import _bootstrap  # noqa: F401
+from lib.io import write_jsonl
+from lib.llm import run_ollama
+from lib.parsing import extract_json_object
 from model_config import default_model
 
 
@@ -68,26 +71,9 @@ def load_prompts(path: Path) -> List[Dict[str, Any]]:
     return prompts
 
 
-def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
-
-
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
     return slug or "schema"
-
-
-def extract_json_block(text: str) -> Dict[str, Any]:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        raise ValueError("No JSON object found in LLM output")
-    candidate = match.group(0)
-    return json.loads(candidate)
 
 
 def normalize_enum(values: Any) -> List[Dict[str, str]]:
@@ -181,16 +167,7 @@ def build_prompt(domain: str, description: str, examples_per_schema: int) -> str
 
 
 def call_ollama(prompt: str, model: str) -> str:
-    result = subprocess.run(
-        ["ollama", "run", model],
-        input=prompt,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ollama exited with {result.returncode}: {result.stderr.strip()}")
-    return result.stdout.strip()
+    return run_ollama(prompt, model)
 
 
 def synthesize_spec(prompt: Dict[str, Any], args: argparse.Namespace, rng: random.Random) -> Dict[str, Any]:
@@ -200,7 +177,7 @@ def synthesize_spec(prompt: Dict[str, Any], args: argparse.Namespace, rng: rando
     llm_prompt = build_prompt(prompt["domain"], prompt.get("description", ""), args.examples_per_schema)
     try:
         raw = call_ollama(llm_prompt, args.model)
-        parsed = extract_json_block(raw)
+        parsed = extract_json_object(raw)
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] ollama generation failed for {prompt['domain']}: {exc}")
         return stub_spec(prompt, rng, args.examples_per_schema)

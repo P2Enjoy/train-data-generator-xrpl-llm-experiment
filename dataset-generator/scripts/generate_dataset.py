@@ -9,10 +9,13 @@ import math
 import random
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, List, Tuple
 
+import _bootstrap  # noqa: F401
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
+
+from lib.io import canonical_json, load_jsonl, write_jsonl
 
 DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
 OP_PHRASES = {
@@ -62,28 +65,6 @@ def parse_args() -> argparse.Namespace:
         help="Seed for deterministic generation.",
     )
     return parser.parse_args()
-
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
-
-
-def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
-
-
-def canonical(obj: Dict[str, Any]) -> str:
-    return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)
 
 
 def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:
@@ -321,7 +302,7 @@ def build_positive_records(
                 "schema_json": entry["schema_json"],
                 "query": query,
                 "current_date": current_date.isoformat(),
-                "ast_json": canonical(ast),
+                "ast_json": canonical_json(ast),
                 "is_valid": True,
                 "validation_error": None,
                 "error_type": None,
@@ -355,7 +336,7 @@ def build_negative_records(
                 "schema_json": entry["schema_json"],
                 "query": base["query"],
                 "current_date": base.get("current_date"),
-                "ast_json": canonical(mutated),
+                "ast_json": canonical_json(mutated),
                 "is_valid": error is None,
                 "validation_error": format_error(error) if error else "Unexpectedly valid",
                 "error_type": mutation,

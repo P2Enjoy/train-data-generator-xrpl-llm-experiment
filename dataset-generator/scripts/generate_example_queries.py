@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
-import re
-import subprocess
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
+import _bootstrap  # noqa: F401
+from lib.io import load_jsonl, write_jsonl
+from lib.llm import run_ollama
+from lib.parsing import extract_json_array
 from model_config import default_model
 
 
@@ -64,24 +65,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
-
-
-def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=True) + "\n")
-
-
 def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:
     ops: List[str] = []
     raw_ops = entry.get("operators") or []
@@ -100,41 +83,6 @@ def extract_operator_consts(entry: Dict[str, Any]) -> List[str]:
         except Exception:  # noqa: BLE001
             ops = []
     return ops or DEFAULT_OPERATORS
-
-
-def extract_json_array(text: str) -> List[str]:
-    def clean_output(chunk: str) -> str:
-        chunk = chunk.strip()
-        chunk = re.sub(r"^```(?:json)?|```$", "", chunk, flags=re.MULTILINE).strip()
-        return chunk
-
-    def try_json_parse(chunk: str) -> Any:
-        try:
-            return json.loads(chunk)
-        except json.JSONDecodeError:
-            return None
-
-    cleaned = clean_output(text)
-    for candidate in (cleaned, cleaned.splitlines()[0] if cleaned else ""):
-        if not candidate:
-            continue
-        parsed = try_json_parse(candidate)
-        if parsed is not None:
-            if isinstance(parsed, list):
-                return parsed
-            if isinstance(parsed, dict):
-                for key in ("queries", "items", "responses"):
-                    if isinstance(parsed.get(key), list):
-                        return parsed[key]
-
-    # fallback: locate first JSON array inside the text
-    match = re.search(r"\[(?:[^\[\]]|\n)*\]", cleaned, flags=re.DOTALL)
-    if match:
-        parsed = try_json_parse(match.group(0))
-        if isinstance(parsed, list):
-            return parsed
-
-    raise ValueError("No JSON array found in LLM output")
 
 
 def build_prompt(entry: Dict[str, Any], count: int, operators: List[str]) -> str:
@@ -158,16 +106,7 @@ def build_prompt(entry: Dict[str, Any], count: int, operators: List[str]) -> str
 
 
 def call_ollama(prompt: str, model: str) -> str:
-    result = subprocess.run(
-        ["ollama", "run", model],
-        input=prompt,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ollama exited with {result.returncode}: {result.stderr.strip()}")
-    return result.stdout.strip()
+    return run_ollama(prompt, model)
 
 
 def stub_queries(entry: Dict[str, Any], count: int, rng: random.Random) -> List[str]:
