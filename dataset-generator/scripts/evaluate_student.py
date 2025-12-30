@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import unsloth
 import argparse
 import builtins
 import json
+import unsloth
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -17,6 +17,7 @@ from peft import PeftModel
 from unsloth import FastModel
 from unsloth.chat_templates import get_chat_template
 
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import canonical_json, write_jsonl
 from lib.llm import run_ollama
 from lib.parsing import extract_json_object
@@ -44,26 +45,56 @@ and represents the program matching the user request.
 
 def parse_args() -> argparse.Namespace:
     default_teacher = default_model()
-    parser = argparse.ArgumentParser(description="Evaluate student LoRA adapters on held-out samples.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+    training_defaults = load_section("training", config_args.config)
+    data_defaults = load_section("dataset_generation", config_args.config)
+    alignment_defaults = load_section("alignment", config_args.config)
+
+    dataset_default = Path(data_defaults.get("dataset_out", "outputs/d_03_dataset.jsonl"))
+    adapter_default = alignment_defaults.get("adapter")
+    if adapter_default:
+        adapter_default_path = Path(adapter_default)
+    else:
+        output_dir = training_defaults.get("output_dir", "outputs/student_runs/gemma3-270m")
+        adapter_default_path = Path(output_dir) / "checkpoint-final"
+    base_model_default = str(training_defaults.get("base_model", "unsloth/gemma-3-270m-it"))
+    max_seq_length_default = int(training_defaults.get("max_seq_length", 2048))
+    load_in_4bit_default = bool(training_defaults.get("load_in_4bit", True))
+    eval_results = alignment_defaults.get("eval_results")
+    if eval_results:
+        out_dir_default = Path(eval_results).parent
+    else:
+        out_dir_default = Path("outputs/student_runs/eval")
+
+    parser = argparse.ArgumentParser(
+        description="Evaluate student LoRA adapters on held-out samples.", parents=[config_parser]
+    )
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("outputs/d_03_dataset.jsonl"),
+        default=dataset_default,
         help="JSONL produced by generate_dataset.py.",
     )
     parser.add_argument(
         "--adapter",
         type=Path,
-        default=Path("outputs/student_runs/gemma3-270m/checkpoint-final"),
+        default=adapter_default_path,
         help="Path to the saved LoRA adapter directory.",
     )
     parser.add_argument(
         "--base-model",
         type=str,
-        default="unsloth/gemma-3-270m-it",
+        default=base_model_default,
         help="Base model id used during training.",
     )
-    parser.add_argument("--max-seq-length", type=int, default=2048, help="Max sequence length.")
+    parser.add_argument("--max-seq-length", type=int, default=max_seq_length_default, help="Max sequence length.")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens to generate.")
     parser.add_argument("--max-samples", type=int, default=200, help="How many rows to evaluate.")
     parser.add_argument("--include-invalid", action="store_true", help="Include invalid targets during eval.")
@@ -72,10 +103,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=load_in_4bit_default,
         help="Load student in 4-bit for eval (default: on).",
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("outputs/student_runs/eval"), help="Where to store logs.")
+    parser.add_argument("--out-dir", type=Path, default=out_dir_default, help="Where to store logs.")
     parser.add_argument(
         "--teacher-model",
         type=str,
@@ -88,7 +119,7 @@ def parse_args() -> argparse.Namespace:
         default=25,
         help="Print progress every N samples.",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def load_student(

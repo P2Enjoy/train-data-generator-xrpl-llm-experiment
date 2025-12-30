@@ -1,0 +1,11 @@
+{
+  "total": 16,
+  "parsed_rate": 0.0625,
+  "schema_valid_rate": 0.0,
+  "exact_match_rate": 0.0,
+  "teacher_agreement_rate": 0.0,
+  "semantic_match_target_rate": 0.0,
+  "semantic_match_teacher_rate": 0.0,
+  "teacher_accept_rate": 0.0,
+  "semantic_pass_rate": 0.0
+}

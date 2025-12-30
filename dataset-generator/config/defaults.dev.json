@@ -40,7 +40,7 @@
     "max_samples": 128,
     "seed": 3407,
     "load_in_4bit": true,
-    "bf16": false,
+    "bf16": true,
     "use_gradient_checkpointing": false,
     "lora_r": 8,
     "lora_alpha": 16,
@@ -61,6 +61,6 @@
     "logging_steps": 5,
     "beta": 0.1,
     "load_in_4bit": true,
-    "bf16": false
+    "bf16": true
   }
 }

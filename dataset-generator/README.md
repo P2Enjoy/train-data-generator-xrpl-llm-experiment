@@ -206,10 +206,10 @@ Flags:
 Use `config/defaults.dev.json` for a ~30-line dataset and small training loop. Examples:
 
 - All stages: `./runAll.sh --config config/defaults.dev.json --with-training --with-evals --with-alignment`
-- Dataset only: `./runDatasetGeneration.sh --config config/defaults.dev.json --model gpt-oss:120b`
+- Dataset only: `./runDatasetGeneration.sh --config config/defaults.dev.json --model gpt-oss:20b`
 - Training: `./runTraining.sh --config config/defaults.dev.json`
-- Evals: `./runEvals.sh --config config/defaults.dev.json --adapter outputs/dev/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b`
-- Alignment: `./runAlignment.sh --config config/defaults.dev.json --adapter outputs/dev/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b`
+- Evals: `./runEvals.sh --config config/defaults.dev.json --teacher-model gpt-oss:20b`
+- Alignment: `./runAlignment.sh --config config/defaults.dev.json --teacher-model gpt-oss:20b`
 
 ### `runTraining.sh`
 

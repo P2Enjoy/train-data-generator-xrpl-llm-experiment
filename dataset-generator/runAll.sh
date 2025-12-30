@@ -75,7 +75,7 @@ fi
 
 if [[ $WITH_EVALS -eq 1 ]]; then
   log "Starting evals stage"
-  "$ROOT/runEvals.sh"
+  "$ROOT/runEvals.sh" --config "${CONFIG_PATH}"
 fi
 
 if [[ $WITH_ALIGNMENT -eq 1 ]]; then

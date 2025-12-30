@@ -71,7 +71,10 @@ echo "Installing / syncing dependencies with uv..."
 uv sync
 
 echo "Running teacher evaluation (required for alignment pairs)..."
-PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py --adapter "${ADAPTER}" "${TEACHER_ARG[@]}"
+PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
+  --config "${CONFIG_PATH}" \
+  --adapter "${ADAPTER}" \
+  "${TEACHER_ARG[@]}"
 
 echo "Building preference pairs..."
 PYTHONUNBUFFERED=1 uv run python -u scripts/build_alignment_pairs.py --config "${CONFIG_PATH}" \
