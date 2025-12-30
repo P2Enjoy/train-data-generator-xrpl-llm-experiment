@@ -15,7 +15,7 @@
     "positives_per_schema": 2,
     "negative_ratio": 0.5,
     "offline_fallback": false,
-    "max_retries": 2
+    "max_retries": -1
   },
   "training": {
     "training_corpus": "outputs/dev/d_05_training_corpus.jsonl",

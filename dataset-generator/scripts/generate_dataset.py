@@ -360,10 +360,13 @@ def main() -> None:
     args = parse_args()
     rng = random.Random(args.seed)
     schemas = load_jsonl(args.schemas)
+    total = len(schemas)
+    print(f"[info] Building dataset from {total} schemas in {args.schemas}")
 
     dataset_rows: List[Dict[str, Any]] = []
     current_date = date.today()
-    for entry in schemas:
+    for idx, entry in enumerate(schemas, start=1):
+        print(f"[info] [{idx}/{total}] {entry.get('schema_id')}")
         if not entry.get("fields"):
             print(f"[warn] skipping {entry.get('schema_id')} because no fields were provided")
             continue
@@ -372,6 +375,9 @@ def main() -> None:
         positives = build_positive_records(entry, validator, operators, rng, current_date, args.positives_per_schema)
         negative_target = int(math.ceil(len(positives) * args.negative_ratio))
         negatives = build_negative_records(entry, validator, operators, rng, positives, negative_target)
+        print(
+            f"[info] ✓ {entry.get('schema_id')}: {len(positives)} positives, {len(negatives)} negatives (target ratio {args.negative_ratio})"
+        )
 
         for record in positives:
             record.pop("_ast", None)

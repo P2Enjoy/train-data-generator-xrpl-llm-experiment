@@ -6,6 +6,10 @@ cd "$ROOT"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
 
+log() {
+  echo "[$(date '+%F %T')] $*"
+}
+
 MODEL_DEFAULT="gpt-oss:120b"
 if [ -f .llmrc ]; then
   MODEL_DEFAULT="$(<.llmrc)"
@@ -42,8 +46,8 @@ done
 
 mkdir -p outputs
 
-echo "Using UV_CACHE_DIR=${UV_CACHE_DIR}"
-echo "Installing / syncing dependencies with uv..."
+log "Using UV_CACHE_DIR=${UV_CACHE_DIR}"
+log "Installing / syncing dependencies with uv..."
 uv sync
 
 env_exports=$(
@@ -75,6 +79,7 @@ PY
 )
 
 eval "${env_exports}"
+log "Resolved dataset outputs: specs=${schema_specs_out}, schemas=${final_schemas_out}, queries=${schema_queries_out}, dataset=${dataset_out}, corpus=${training_corpus_out}"
 
 run_step() {
   local name="$1"
@@ -89,7 +94,7 @@ run_step() {
   local max_tries=2
   while true; do
     tries=$((tries + 1))
-    echo "Running ${name} (attempt ${tries})..."
+    log "Running ${name} (attempt ${tries})..."
     local cmd_output
     if ! cmd_output="$(uv run python "$@" 2>&1)"; then
       echo "${cmd_output}"
@@ -151,11 +156,11 @@ pretty_pairs=(
 for pair in "${pretty_pairs[@]}"; do
   IFS="|" read -r input output <<< "$pair"
   if [ -s "$output" ]; then
-    echo "Skipping prettify for $input"
+    log "Skipping prettify for $input"
     continue
   fi
-  echo "Prettifying $input → $output"
+  log "Prettifying $input → $output"
   uv run python scripts/pretty_jsonl.py --input "$input" --out "$output"
 done
 
-echo "Dataset generation complete."
+log "Dataset generation complete."

@@ -156,9 +156,12 @@ def main() -> None:
     template = load_json(args.base_template)
     specs = load_jsonl(args.domain_specs)
     operator_catalog = load_operator_catalog(args.operator_catalog)
+    total = len(specs)
+    print(f"[info] Building schemas for {total} domains from {args.domain_specs}")
 
     built = []
-    for spec in specs:
+    for idx, spec in enumerate(specs, start=1):
+        print(f"[info] [{idx}/{total}] {spec['schema_id']} ({spec.get('domain')})")
         operators = choose_operators(spec, operator_catalog, rng, args.min_operators, args.max_operators)
         schema = build_schema(spec, template, operators)
         built.append(
@@ -173,6 +176,7 @@ def main() -> None:
                 "schema_json": canonical_json(schema),
             }
         )
+        print(f"[info] ✓ {spec['schema_id']}: {len(operators)} operators, {len(spec.get('fields', []))} fields")
 
     write_jsonl(args.out, built)
     print(f"Wrote {len(built)} schemas to {args.out}")

@@ -6,6 +6,10 @@ cd "$ROOT"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
 
+log() {
+  echo "[$(date '+%F %T')] $*"
+}
+
 WITH_TRAINING=0
 WITH_EVALS=0
 WITH_ALIGNMENT=0
@@ -61,18 +65,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+log "Starting dataset generation with config=${CONFIG_PATH}"
 "$ROOT/runDatasetGeneration.sh" "${MODEL_ARG[@]}" --config "${CONFIG_PATH}"
 
 if [[ $WITH_TRAINING -eq 1 ]]; then
+  log "Starting training stage"
   "$ROOT/runTraining.sh" --config "${CONFIG_PATH}"
 fi
 
 if [[ $WITH_EVALS -eq 1 ]]; then
+  log "Starting evals stage"
   "$ROOT/runEvals.sh"
 fi
 
 if [[ $WITH_ALIGNMENT -eq 1 ]]; then
+  log "Starting alignment stage"
   "$ROOT/runAlignment.sh" --config "${CONFIG_PATH}"
 fi
 
-echo "runAll complete."
+log "runAll complete."

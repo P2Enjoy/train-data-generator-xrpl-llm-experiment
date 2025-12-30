@@ -232,14 +232,20 @@ def main() -> None:
     args = parse_args()
     rng = random.Random(args.seed)
     prompts = load_prompts(args.prompts)
+    total = len(prompts)
+    print(f"[info] Loaded {total} domain prompts from {args.prompts}")
     specs: List[Dict[str, Any]] = []
     skipped = 0
-    for prompt in prompts:
+    for idx, prompt in enumerate(prompts, start=1):
+        print(f"[info] [{idx}/{total}] Generating spec for domain '{prompt['domain']}'")
         spec = synthesize_spec(prompt, args, rng)
         if spec is None:
             skipped += 1
             continue
         specs.append(spec)
+        print(
+            f"[info] ✓ {prompt['domain']}: {len(spec['fields'])} fields, {len(spec['example_queries'])} example queries"
+        )
     write_jsonl(args.out, specs)
     suffix = f" (skipped {skipped} domains)" if skipped else ""
     print(f"Wrote {len(specs)} specs to {args.out}{suffix}")

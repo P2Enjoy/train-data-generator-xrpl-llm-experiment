@@ -77,9 +77,13 @@ def build_prompt(schema_json: str, query: str, current_date: str | None) -> str:
 def main() -> None:
     args = parse_args()
     dataset = load_jsonl(args.dataset)
+    total = len(dataset)
+    print(
+        f"[info] Building training corpus from {total} dataset rows (include_invalid={args.include_invalid}, max_samples={args.max_samples})"
+    )
     rows: List[Dict[str, Any]] = []
 
-    for sample in dataset:
+    for idx, sample in enumerate(dataset, start=1):
         if not args.include_invalid and not sample.get("is_valid", True):
             continue
         prompt_text = build_prompt(sample["schema_json"], sample["query"], sample.get("current_date"))
@@ -93,6 +97,7 @@ def main() -> None:
             }
         )
         if args.max_samples and len(rows) >= args.max_samples:
+            print(f"[info] Reached max_samples={args.max_samples} at dataset row {idx}")
             break
 
     write_jsonl(args.out, rows)

@@ -163,10 +163,14 @@ def main() -> None:
     args = parse_args()
     rng = random.Random(args.seed)
     schemas = load_jsonl(args.schemas)
+    total = len(schemas)
+    print(f"[info] Generating example queries for {total} schemas from {args.schemas}")
 
     records = []
-    for entry in schemas:
+    for idx, entry in enumerate(schemas, start=1):
+        print(f"[info] [{idx}/{total}] {entry['schema_id']} ({entry.get('domain')})")
         queries = generate_queries(entry, args, rng)
+        print(f"[info] ✓ {entry['schema_id']}: generated {len(queries)} queries")
         records.append(
             {
                 "schema_id": entry["schema_id"],
