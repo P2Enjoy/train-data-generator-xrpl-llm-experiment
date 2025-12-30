@@ -151,6 +151,24 @@ def parse_args() -> argparse.Namespace:
         default=defaults.get("max_samples", None),
         help="Optional cap on total samples.",
     )
+    parser.add_argument(
+        "--early-stop-min-delta",
+        type=float,
+        default=float(defaults.get("early_stop_min_delta", 0.002)),
+        help="Minimum eval_loss improvement required to reset early-stop counter.",
+    )
+    parser.add_argument(
+        "--early-stop-patience",
+        type=int,
+        default=int(defaults.get("early_stop_patience", 2)),
+        help="Stop training if eval_loss fails to improve by min_delta for this many consecutive evals.",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=float(defaults.get("max_grad_norm", 1.0)),
+        help="Gradient clipping value (0 disables).",
+    )
     parser.add_argument("--seed", type=int, default=int(defaults.get("seed", 3407)), help="Random seed.")
     parser.add_argument(
         "--load-in-4bit",
@@ -290,14 +308,55 @@ class JsonlLogger(TrainerCallback):
             handle.write(json.dumps(payload) + "\n")
 
 
+class EvalEarlyStopper(TrainerCallback):
+    """Stop training when eval_loss stops improving by a minimum delta for N evals."""
+
+    def __init__(self, min_delta: float, patience: int) -> None:
+        self.min_delta = float(min_delta)
+        self.patience = int(patience)
+        self.prev: float | None = None
+        self.stalled = 0
+
+    def on_evaluate(
+        self,
+        args: SFTConfig,
+        state: TrainerState,
+        control: TrainerControl,
+        metrics: Dict[str, float] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if metrics is None or "eval_loss" not in metrics:
+            return
+        current = float(metrics["eval_loss"])
+        if self.prev is None:
+            self.prev = current
+            return
+        improvement = self.prev - current
+        if improvement >= self.min_delta:
+            self.stalled = 0
+        else:
+            self.stalled += 1
+            if self.stalled >= self.patience:
+                control.should_training_stop = True
+                print(
+                    f"[early-stop] eval_loss improvement < {self.min_delta} for {self.patience} evals; stopping training."
+                )
+        self.prev = current
+
+
 class CleanSFTTrainer(SFTTrainer):
     """Strip collator-only bookkeeping fields before forwarding to the model."""
 
-    def compute_loss(self, model, inputs, return_outputs=False):  # type: ignore[override]
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):  # type: ignore[override]
         if "num_items_in_batch" in inputs:
             inputs = dict(inputs)
             inputs.pop("num_items_in_batch", None)
-        return super().compute_loss(model, inputs, return_outputs=return_outputs)
+        return super().compute_loss(
+            model,
+            inputs,
+            return_outputs=return_outputs,
+            num_items_in_batch=num_items_in_batch,
+        )
 
 
 def save_run_config(path: Path, args: argparse.Namespace, train_len: int, eval_len: int | None) -> None:
@@ -435,6 +494,7 @@ def main() -> None:
         output_dir=str(args.output_dir),
         gradient_checkpointing=args.use_gradient_checkpointing,
         eval_accumulation_steps=args.eval_accumulation_steps,
+        max_grad_norm=args.max_grad_norm,
     )
 
     trainer = CleanSFTTrainer(
@@ -449,6 +509,8 @@ def main() -> None:
         instruction_part=GEMMA3_INSTRUCTION_PART,
         response_part=GEMMA3_RESPONSE_PART,
     )
+    if eval_set is not None and args.early_stop_min_delta > 0 and args.early_stop_patience > 0:
+        trainer.add_callback(EvalEarlyStopper(args.early_stop_min_delta, args.early_stop_patience))
     try:
         sanity_check_eval_batch(trainer)
     except Exception as exc:  # noqa: BLE001
