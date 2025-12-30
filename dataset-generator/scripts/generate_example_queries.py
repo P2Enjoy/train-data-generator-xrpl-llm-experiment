@@ -71,8 +71,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-retries",
         type=int,
-        default=2,
-        help="Retries when Ollama output lacks parseable JSON.",
+        default=int(defaults.get("max_retries", -1)),
+        help="Retries when Ollama output lacks parseable JSON. Use -1 for unlimited (default).",
     )
     return parser.parse_args(remaining)
 
@@ -140,25 +140,23 @@ def generate_queries(entry: Dict[str, Any], args: argparse.Namespace, rng: rando
         return stub_queries(entry, args.per_schema, rng)
     prompt = build_prompt(entry, args.per_schema, operators)
     attempts = 0
-    parsed: List[str] | None = None
-    while parsed is None and attempts <= args.max_retries:
+    max_retries = args.max_retries
+    while True:
         try:
             raw = call_ollama(prompt, args.model)
             parsed = extract_json_array(raw)
+            queries = [str(item) for item in parsed if isinstance(item, (str, int, float))]
+            if len(queries) >= args.per_schema:
+                return queries[: args.per_schema]
+            print(f"[retry] {entry['schema_id']} returned {len(queries)}/{args.per_schema} queries, retrying teacher model")
         except ValueError as exc:
-            attempts += 1
-            if attempts > args.max_retries:
-                print(f"[warn] ollama query generation failed for {entry['schema_id']}: {exc}")
-                return stub_queries(entry, args.per_schema, rng)
-            print(f"[retry] {entry['schema_id']} parsing failed, retrying ({attempts}/{args.max_retries})")
+            print(f"[retry] {entry['schema_id']} parsing failed: {exc}")
         except Exception as exc:  # noqa: BLE001
-            print(f"[warn] ollama query generation failed for {entry['schema_id']}: {exc}")
-            return stub_queries(entry, args.per_schema, rng)
+            print(f"[retry] {entry['schema_id']} ollama error: {exc}")
 
-    queries = [str(item) for item in parsed if isinstance(item, (str, int, float))]
-    while len(queries) < args.per_schema:
-        queries.append(f"{entry.get('domain', 'Domain')} fallback query {len(queries)+1}")
-    return queries[: args.per_schema]
+        attempts += 1
+        if max_retries >= 0 and attempts >= max_retries:
+            raise RuntimeError(f"Ollama query generation failed for {entry['schema_id']} after {attempts} attempts")
 
 
 def main() -> None:

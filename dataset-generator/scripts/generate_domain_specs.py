@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         default=bool(defaults.get("offline_fallback", False)),
         help="Skip ollama and use deterministic stubs instead (for testing).",
     )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=int(defaults.get("max_retries", -1)),
+        help="Retries when Ollama output is invalid. Use -1 for unlimited retries.",
+    )
     return parser.parse_args(remaining)
 
 
@@ -181,44 +187,62 @@ def call_ollama(prompt: str, model: str) -> str:
     return run_ollama(prompt, model)
 
 
-def synthesize_spec(prompt: Dict[str, Any], args: argparse.Namespace, rng: random.Random) -> Dict[str, Any]:
+def synthesize_spec(prompt: Dict[str, Any], args: argparse.Namespace, rng: random.Random) -> Dict[str, Any] | None:
     if args.offline_fallback:
         return stub_spec(prompt, rng, args.examples_per_schema)
 
     llm_prompt = build_prompt(prompt["domain"], prompt.get("description", ""), args.examples_per_schema)
-    try:
-        raw = call_ollama(llm_prompt, args.model)
-        parsed = extract_json_object(raw)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] ollama generation failed for {prompt['domain']}: {exc}")
-        return stub_spec(prompt, rng, args.examples_per_schema)
+    attempts = 0
+    max_retries = args.max_retries
+    while True:
+        try:
+            raw = call_ollama(llm_prompt, args.model)
+            parsed = extract_json_object(raw)
 
-    fields = normalize_fields(parsed.get("fields"))
-    if not fields:
-        fields = stub_spec(prompt, rng, args.examples_per_schema)["fields"]
+            fields = normalize_fields(parsed.get("fields"))
+            if not fields:
+                raise ValueError("no fields returned")
 
-    example_queries = parsed.get("example_queries") or []
-    example_queries = [str(q) for q in example_queries if isinstance(q, (str, int, float))]
-    while len(example_queries) < args.examples_per_schema:
-        example_queries.append(f"{prompt['domain'].title()} example query {len(example_queries) + 1}")
+            example_queries = parsed.get("example_queries") or []
+            example_queries = [str(q) for q in example_queries if isinstance(q, (str, int, float))]
+            if len(example_queries) < args.examples_per_schema:
+                raise ValueError(f"only {len(example_queries)} example queries")
 
-    return {
-        "schema_id": parsed.get("schema_id") or f"{slugify(prompt['domain'])}_funnel_v1",
-        "domain": parsed.get("domain") or prompt["domain"],
-        "description": parsed.get("description") or prompt.get("description", ""),
-        "fields": fields,
-        "example_queries": example_queries[: args.examples_per_schema],
-        "source_prompt": prompt,
-    }
+            return {
+                "schema_id": parsed.get("schema_id") or f"{slugify(prompt['domain'])}_funnel_v1",
+                "domain": parsed.get("domain") or prompt["domain"],
+                "description": parsed.get("description") or prompt.get("description", ""),
+                "fields": fields,
+                "example_queries": example_queries[: args.examples_per_schema],
+                "source_prompt": prompt,
+            }
+        except Exception as exc:  # noqa: BLE001
+            attempts += 1
+            limit_hit = max_retries >= 0 and attempts > max_retries
+            if limit_hit:
+                print(f"[warn] ollama generation failed for {prompt['domain']} after {attempts} attempts: {exc}. Skipping domain.")
+                return None
+            print(
+                f"[retry] {prompt['domain']} generation failed (attempt {attempts}/{max_retries if max_retries >= 0 else 'inf'}): {exc}"
+            )
+            continue
 
 
 def main() -> None:
     args = parse_args()
     rng = random.Random(args.seed)
     prompts = load_prompts(args.prompts)
-    specs = [synthesize_spec(prompt, args, rng) for prompt in prompts]
+    specs: List[Dict[str, Any]] = []
+    skipped = 0
+    for prompt in prompts:
+        spec = synthesize_spec(prompt, args, rng)
+        if spec is None:
+            skipped += 1
+            continue
+        specs.append(spec)
     write_jsonl(args.out, specs)
-    print(f"Wrote {len(specs)} specs to {args.out}")
+    suffix = f" (skipped {skipped} domains)" if skipped else ""
+    print(f"Wrote {len(specs)} specs to {args.out}{suffix}")
 
 
 if __name__ == "__main__":
