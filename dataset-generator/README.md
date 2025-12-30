@@ -202,6 +202,16 @@ Flags:
 - `--config`: path to config JSON
 - `--model`: Ollama model id to use for schema/query generation
 
+### Fast dev config (tiny end-to-end runs)
+
+Use `config/defaults.dev.json` for a ~30-line dataset and small training loop. Examples:
+
+- All stages: `./runAll.sh --config config/defaults.dev.json --with-training --with-evals --with-alignment`
+- Dataset only: `./runDatasetGeneration.sh --config config/defaults.dev.json --model gpt-oss:120b`
+- Training: `./runTraining.sh --config config/defaults.dev.json`
+- Evals: `./runEvals.sh --config config/defaults.dev.json --adapter outputs/dev/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b`
+- Alignment: `./runAlignment.sh --config config/defaults.dev.json --adapter outputs/dev/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b`
+
 ### `runTraining.sh`
 
 Runs SFT training (`scripts/train_student_unsloth.py`).

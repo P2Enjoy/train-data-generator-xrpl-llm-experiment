@@ -5,6 +5,7 @@
     "per_schema_queries": 60,
     "min_operators": 4,
     "max_operators": 7,
+    "max_retries": 10,
     "seed": 11,
     "include_invalid": true,
     "schema_specs_out": "outputs/d_01_domain_specs.jsonl",
