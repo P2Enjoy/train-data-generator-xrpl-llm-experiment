@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("outputs/d_04_dataset.jsonl"),
+        default=Path("outputs/d_03_dataset.jsonl"),
         help="JSONL produced by generate_dataset.py.",
     )
     parser.add_argument(

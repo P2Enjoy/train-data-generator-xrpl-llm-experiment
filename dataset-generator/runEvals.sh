@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
+export PYTHONUNBUFFERED=1
 
 usage() {
   cat <<EOF
@@ -53,10 +54,10 @@ echo "Installing / syncing dependencies with uv..."
 uv sync
 
 echo "Running evaluation..."
-uv run python scripts/evaluate_student.py "${EVAL_ARGS[@]}"
+PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py "${EVAL_ARGS[@]}"
 
 echo "Building report..."
-uv run python scripts/report_training.py \
+PYTHONUNBUFFERED=1 uv run python -u scripts/report_training.py \
   --training-metrics "${TRAIN_DIR}/training_metrics.jsonl" \
   --eval-summary "${EVAL_OUT}/evaluation_summary.json" \
   --eval-results "${EVAL_OUT}/evaluation_results.jsonl" \

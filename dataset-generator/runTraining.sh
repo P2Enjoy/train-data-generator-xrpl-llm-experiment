@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
+export PYTHONUNBUFFERED=1
 
 export CUDA_HOME=/usr/local/cuda-13.0
 export TRITON_PTXAS_PATH="${CUDA_HOME}/bin/ptxas"
@@ -34,5 +35,5 @@ echo "Installing / syncing dependencies with uv..."
 uv sync
 
 echo "Starting student training..."
-uv run python scripts/train_student_unsloth.py "$@"
+PYTHONUNBUFFERED=1 uv run python -u scripts/train_student_unsloth.py "$@"
 echo "Training finished."

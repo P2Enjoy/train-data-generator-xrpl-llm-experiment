@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
+export PYTHONUNBUFFERED=1
 
 CONFIG_PATH="config/defaults.json"
 ADAPTER_OVERRIDE=""
@@ -70,15 +71,15 @@ echo "Installing / syncing dependencies with uv..."
 uv sync
 
 echo "Running teacher evaluation (required for alignment pairs)..."
-uv run python scripts/evaluate_student.py --adapter "${ADAPTER}" "${TEACHER_ARG[@]}"
+PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py --adapter "${ADAPTER}" "${TEACHER_ARG[@]}"
 
 echo "Building preference pairs..."
-uv run python scripts/build_alignment_pairs.py --config "${CONFIG_PATH}" \
+PYTHONUNBUFFERED=1 uv run python -u scripts/build_alignment_pairs.py --config "${CONFIG_PATH}" \
   --eval-results "${EVAL_RESULTS_DEFAULT}" \
   --out "${PAIRS_OUT_DEFAULT}"
 
 echo "Starting alignment (DPO)..."
-uv run python scripts/train_alignment_dpo.py --config "${CONFIG_PATH}" \
+PYTHONUNBUFFERED=1 uv run python -u scripts/train_alignment_dpo.py --config "${CONFIG_PATH}" \
   --pairs "${PAIRS_OUT_DEFAULT}" \
   --adapter "${ADAPTER}" \
   "${DPO_ARGS[@]}"

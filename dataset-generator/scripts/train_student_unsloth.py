@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
         default=Path(
             defaults.get(
                 "training_corpus",
-                data_defaults.get("training_corpus_out", "outputs/d_05_training_corpus.jsonl"),
+                data_defaults.get("training_corpus_out", "outputs/d_04_training_corpus.jsonl"),
             )
         ),
         help="JSONL produced by build_training_corpus.py.",

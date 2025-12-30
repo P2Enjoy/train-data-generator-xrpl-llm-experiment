@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
+export PYTHONUNBUFFERED=1
 
 log() {
   echo "[$(date '+%F %T')] $*"
@@ -72,40 +73,41 @@ def emit(name: str, fallback: str) -> None:
 
 emit("schema_specs_out", "outputs/d_01_domain_specs.jsonl")
 emit("final_schemas_out", "outputs/d_02_final_schemas.jsonl")
-emit("schema_queries_out", "outputs/d_03_schema_queries.jsonl")
-emit("dataset_out", "outputs/d_04_dataset.jsonl")
-emit("training_corpus_out", "outputs/d_05_training_corpus.jsonl")
+emit("dataset_out", "outputs/d_03_dataset.jsonl")
+emit("training_corpus_out", "outputs/d_04_training_corpus.jsonl")
 PY
 )
 
 eval "${env_exports}"
-log "Resolved dataset outputs: specs=${schema_specs_out}, schemas=${final_schemas_out}, queries=${schema_queries_out}, dataset=${dataset_out}, corpus=${training_corpus_out}"
+log "Resolved dataset outputs: specs=${schema_specs_out}, schemas=${final_schemas_out}, dataset=${dataset_out}, corpus=${training_corpus_out}"
 
 run_step() {
   local name="$1"
   local condition="$2"
   shift 2
   if eval "$condition"; then
-    echo "Skipping ${name}: output already exists."
+    log "Skipping ${name}: output already exists."
     return
   fi
 
   local tries=0
   local max_tries=2
   while true; do
+    local tmpfile
+    tmpfile="$(mktemp)"
     tries=$((tries + 1))
     log "Running ${name} (attempt ${tries})..."
-    local cmd_output
-    if ! cmd_output="$(uv run python "$@" 2>&1)"; then
-      echo "${cmd_output}"
+    if ! PYTHONUNBUFFERED=1 uv run python -u "$@" 2>&1 | tee "${tmpfile}"; then
       echo "[error] command failed"
+      rm -f "${tmpfile}"
       exit 1
     fi
-    echo "${cmd_output}"
-    if [[ "${cmd_output}" == *"[warn]"* && ${tries} -lt ${max_tries} ]]; then
-      echo "[retry] detected warning, re-running ${name}"
+    if grep -q "\[warn\]" "${tmpfile}" && [[ ${tries} -lt ${max_tries} ]]; then
+      log "[retry] detected warning, re-running ${name}"
+      rm -f "${tmpfile}"
       continue
     fi
+    rm -f "${tmpfile}"
     break
   done
 }
@@ -122,13 +124,6 @@ run_step \
   "[ -s \"${final_schemas_out}\" ]" \
   scripts/build_schemas.py \
     --config "${CONFIG_PATH}"
-
-run_step \
-  "example query generation" \
-  "[ -s \"${schema_queries_out}\" ]" \
-  scripts/generate_example_queries.py \
-    --config "${CONFIG_PATH}" \
-    --model "${MODEL}"
 
 run_step \
   "dataset generation" \
@@ -148,7 +143,6 @@ mkdir -p "$PRETTY_DIR"
 pretty_pairs=(
   "${schema_specs_out}|$PRETTY_DIR/$(basename "${schema_specs_out%.jsonl}").json"
   "${final_schemas_out}|$PRETTY_DIR/$(basename "${final_schemas_out%.jsonl}").json"
-  "${schema_queries_out}|$PRETTY_DIR/$(basename "${schema_queries_out%.jsonl}").json"
   "${dataset_out}|$PRETTY_DIR/$(basename "${dataset_out%.jsonl}").json"
   "${training_corpus_out}|$PRETTY_DIR/$(basename "${training_corpus_out%.jsonl}").json"
 )

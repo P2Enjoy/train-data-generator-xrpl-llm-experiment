@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import textwrap
 from pathlib import Path
 from typing import Any, Dict, List
@@ -18,6 +19,13 @@ from model_config import default_model
 
 OLLAMA_MODEL = default_model()
 DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
+PLACEHOLDER_PATTERNS = [
+    re.compile(r"^\.+$"),
+    re.compile(r"^query\s*\d+$"),
+    re.compile(r"^(sample|example)\s*query\s*\d+$"),
+    re.compile(r"^todo$"),
+    re.compile(r"^tbd$"),
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -134,7 +142,45 @@ def stub_queries(entry: Dict[str, Any], count: int, rng: random.Random) -> List[
     return queries
 
 
-def generate_queries(entry: Dict[str, Any], args: argparse.Namespace, rng: random.Random) -> List[str]:
+def is_placeholder_query(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if lowered in {"...", "..", ".", "n/a", "na"}:
+        return True
+    if all(ch in "._-=/" for ch in lowered):
+        return True
+    for pattern in PLACEHOLDER_PATTERNS:
+        if pattern.match(lowered):
+            return True
+    if not any(ch.isalpha() for ch in lowered):
+        return True
+    return False
+
+
+def filter_queries(raw_items: List[Any]) -> tuple[list[str], int]:
+    filtered: list[str] = []
+    seen: set[str] = set()
+    dropped = 0
+    for item in raw_items:
+        if not isinstance(item, (str, int, float)):
+            dropped += 1
+            continue
+        text = str(item).strip()
+        if is_placeholder_query(text):
+            dropped += 1
+            continue
+        key = text.lower()
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        filtered.append(text)
+    return filtered, dropped
+
+
+def generate_queries(entry: Dict[str, Any], args: argparse.Namespace, rng: random.Random) -> List[str] | None:
     operators = extract_operator_consts(entry)
     if args.offline_fallback:
         return stub_queries(entry, args.per_schema, rng)
@@ -145,18 +191,25 @@ def generate_queries(entry: Dict[str, Any], args: argparse.Namespace, rng: rando
         try:
             raw = call_ollama(prompt, args.model)
             parsed = extract_json_array(raw)
-            queries = [str(item) for item in parsed if isinstance(item, (str, int, float))]
+            queries, dropped = filter_queries(parsed)
+            if dropped:
+                print(f"[warn] {entry['schema_id']} dropped {dropped} placeholder/duplicate queries")
             if len(queries) >= args.per_schema:
                 return queries[: args.per_schema]
-            print(f"[retry] {entry['schema_id']} returned {len(queries)}/{args.per_schema} queries, retrying teacher model")
+            print(
+                f"[retry] {entry['schema_id']} returned {len(queries)}/{args.per_schema} valid queries, retrying teacher model"
+            )
         except ValueError as exc:
             print(f"[retry] {entry['schema_id']} parsing failed: {exc}")
         except Exception as exc:  # noqa: BLE001
             print(f"[retry] {entry['schema_id']} ollama error: {exc}")
 
         attempts += 1
-        if max_retries >= 0 and attempts >= max_retries:
-            raise RuntimeError(f"Ollama query generation failed for {entry['schema_id']} after {attempts} attempts")
+        if max_retries >= 0 and attempts > max_retries:
+            print(
+                f"[warn] ollama query generation failed for {entry['schema_id']} after {attempts} attempts. Skipping schema."
+            )
+            return None
 
 
 def main() -> None:
@@ -167,9 +220,14 @@ def main() -> None:
     print(f"[info] Generating example queries for {total} schemas from {args.schemas}")
 
     records = []
+    skipped = 0
     for idx, entry in enumerate(schemas, start=1):
         print(f"[info] [{idx}/{total}] {entry['schema_id']} ({entry.get('domain')})")
         queries = generate_queries(entry, args, rng)
+        if queries is None:
+            skipped += 1
+            print(f"[warn] {entry['schema_id']} skipped due to invalid query generation")
+            continue
         print(f"[info] ✓ {entry['schema_id']}: generated {len(queries)} queries")
         records.append(
             {
@@ -180,7 +238,8 @@ def main() -> None:
         )
 
     write_jsonl(args.out, records)
-    print(f"Wrote queries for {len(records)} schemas to {args.out}")
+    suffix = f" (skipped {skipped} schemas)" if skipped else ""
+    print(f"Wrote queries for {len(records)} schemas to {args.out}{suffix}")
 
 
 if __name__ == "__main__":

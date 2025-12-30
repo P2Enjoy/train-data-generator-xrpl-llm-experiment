@@ -2,7 +2,6 @@
   "dataset_generation": {
     "prompts_path": "data/domain_prompts.jsonl",
     "examples_per_schema": 60,
-    "per_schema_queries": 60,
     "min_operators": 4,
     "max_operators": 7,
     "max_retries": 10,
@@ -10,14 +9,13 @@
     "include_invalid": true,
     "schema_specs_out": "outputs/d_01_domain_specs.jsonl",
     "final_schemas_out": "outputs/d_02_final_schemas.jsonl",
-    "schema_queries_out": "outputs/d_03_schema_queries.jsonl",
-    "dataset_out": "outputs/d_04_dataset.jsonl",
-    "training_corpus_out": "outputs/d_05_training_corpus.jsonl",
+    "dataset_out": "outputs/d_03_dataset.jsonl",
+    "training_corpus_out": "outputs/d_04_training_corpus.jsonl",
     "positives_per_schema": 250,
     "negative_ratio": 0.6
   },
   "training": {
-    "training_corpus": "outputs/d_05_training_corpus.jsonl",
+    "training_corpus": "outputs/d_04_training_corpus.jsonl",
     "output_dir": "outputs/student_runs/gemma3-270m",
     "base_model": "unsloth/gemma-3-270m-it",
     "max_seq_length": 32768,

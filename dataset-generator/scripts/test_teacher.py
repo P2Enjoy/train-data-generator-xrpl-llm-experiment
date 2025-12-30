@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--training-corpus",
         type=Path,
-        default=Path("outputs/d_05_training_corpus.jsonl"),
+        default=Path("outputs/d_04_training_corpus.jsonl"),
         help="JSONL produced by build_training_corpus.py.",
     )
     parser.add_argument(
