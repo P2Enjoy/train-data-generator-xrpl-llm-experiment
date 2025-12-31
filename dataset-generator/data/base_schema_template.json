@@ -81,8 +81,42 @@
       "required": ["end", "start"],
       "additionalProperties": false,
       "$comment": "Business rule: timeframe.end must be greater than or equal to timeframe.start. This rule is enforced by the application or validation engine."
+    },
+    "refusal": {
+      "type": "object",
+      "title": "Refusal",
+      "description": "Reasoned refusal when the request cannot be satisfied with the available fields or operators.",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short explanation of why the request cannot be satisfied using this schema."
+        },
+        "suggestion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Closest feasible alternative request using available fields or operators."
+        }
+      },
+      "required": ["reason", "suggestion"],
+      "additionalProperties": false
     }
   },
-  "required": ["prompt", "steps", "timeframe"],
+  "required": ["prompt"],
+  "oneOf": [
+    {
+      "required": ["steps", "timeframe"],
+      "not": { "required": ["refusal"] }
+    },
+    {
+      "required": ["refusal"],
+      "not": {
+        "anyOf": [
+          { "required": ["steps"] },
+          { "required": ["timeframe"] }
+        ]
+      }
+    }
+  ],
   "additionalProperties": false
 }

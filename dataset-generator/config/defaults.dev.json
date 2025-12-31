@@ -12,6 +12,7 @@
     "training_corpus_out": "outputs/dev/d_04_training_corpus.jsonl",
     "positives_per_schema": 2,
     "negative_ratio": 0.5,
+    "refusals_per_schema": 1,
     "offline_fallback": false,
     "max_retries": -1
   },
@@ -49,6 +50,7 @@
   "alignment": {
     "pairs_out": "outputs/dev/student_runs/alignment/dpo_pairs.jsonl",
     "eval_results": "outputs/dev/student_runs/eval/evaluation_results.jsonl",
+    "eval_summary": "outputs/dev/student_runs/eval/evaluation_summary.json",
     "base_model": "unsloth/gemma-3-270m-it",
     "adapter": "outputs/dev/student_runs/gemma3-270m/checkpoint-final",
     "output_dir": "outputs/dev/student_runs/gemma3-270m-dpo",

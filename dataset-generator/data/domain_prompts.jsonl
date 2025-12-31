@@ -8,3 +8,28 @@
 {"domain": "entertainment", "description": "Movies, music, games, and leisure activities."}
 {"domain": "technology", "description": "Tech news, gadgets, and software development."}
 {"domain": "healthcare", "description": "Medical information, health tips, and wellness advice."}
+{"domain": "marketing", "description": "Marketing campaigns, messaging, and lead generation."}
+{"domain": "sales", "description": "Sales pipeline, deals, and revenue forecasting."}
+{"domain": "support", "description": "Customer support tickets, SLA tracking, and service quality."}
+{"domain": "product", "description": "Product roadmaps, releases, feedback, and backlog."}
+{"domain": "hr", "description": "Hiring, onboarding, payroll, and employee experience."}
+{"domain": "legal", "description": "Contracts, compliance, and policy management."}
+{"domain": "security", "description": "Cybersecurity incidents, access controls, and risk monitoring."}
+{"domain": "logistics", "description": "Shipping, warehousing, fleet, and delivery operations."}
+{"domain": "ecommerce", "description": "Online storefronts, checkout flows, and digital merchandising."}
+{"domain": "retail", "description": "In-store operations, inventory, and point-of-sale."}
+{"domain": "manufacturing", "description": "Production lines, quality control, and maintenance."}
+{"domain": "agriculture", "description": "Farming operations, crop management, and yields."}
+{"domain": "environment", "description": "Sustainability metrics, emissions, and resource usage."}
+{"domain": "automotive", "description": "Vehicle maintenance, telematics, and fleet management."}
+{"domain": "realestate", "description": "Property listings, rentals, and transactions."}
+{"domain": "sports", "description": "Athlete performance, schedules, and scores."}
+{"domain": "gaming", "description": "Game sessions, matchmaking, and player progression."}
+{"domain": "art", "description": "Art creation, galleries, and curation."}
+{"domain": "music", "description": "Songwriting, production, and performance."}
+{"domain": "photography", "description": "Photo shoots, editing, and asset management."}
+{"domain": "parenting", "description": "Childcare routines, education, and family planning."}
+{"domain": "pets", "description": "Pet care, training, and health records."}
+{"domain": "home", "description": "Home maintenance, repairs, and household management."}
+{"domain": "fashion", "description": "Outfits, styling, and wardrobe planning."}
+{"domain": "beauty", "description": "Skincare, haircare, and personal grooming."}
