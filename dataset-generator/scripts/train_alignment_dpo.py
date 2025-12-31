@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any, Dict
 
 import _bootstrap  # noqa: F401
+import unsloth  # noqa: F401  # ensure patches apply before other ML deps
 import torch
 from datasets import load_dataset
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from peft import PeftModel
 from trl import DPOConfig, DPOTrainer
 from unsloth import FastModel
 from unsloth.chat_templates import get_chat_template
-from lib.config import DEFAULT_CONFIG_PATH, load_section
 
 SYSTEM_PROMPT = (
     "You are a JSON AST generator. You must output a single JSON object that satisfies the"
@@ -98,8 +99,18 @@ def load_pairs(path: Path, tokenizer, max_seq_length: int):
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompt_text = prompt_text.removeprefix("<bos>")
 
-        chosen = prompt_text + row["chosen"]
-        rejected = prompt_text + row["rejected"]
+        prompt_tokens = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+        prompt_token_len = len(prompt_tokens)
+
+        def clip_completion(text: str) -> str:
+            toks = tokenizer(text, add_special_tokens=False)["input_ids"]
+            if prompt_token_len + len(toks) > max_seq_length:
+                keep = max(max_seq_length - prompt_token_len, 1)
+                return tokenizer.decode(toks[:keep], skip_special_tokens=False)
+            return text
+
+        chosen = clip_completion(row["chosen"])
+        rejected = clip_completion(row["rejected"])
 
         # cheap truncation safeguard to reduce empty-label cases
         for key in ("chosen", "rejected"):
@@ -124,6 +135,9 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    train_adapter_name = "train"
+    ref_adapter_name = "reference"
+
     model, tokenizer = FastModel.from_pretrained(
         model_name=args.base_model,
         max_seq_length=args.max_seq_length,
@@ -134,7 +148,9 @@ def main() -> None:
     if not hasattr(builtins, "VARIANT_KWARG_KEYS"):
         builtins.VARIANT_KWARG_KEYS = {"adapter_name"}
     tokenizer = get_chat_template(tokenizer, chat_template="gemma3")
-    model = PeftModel.from_pretrained(model, args.adapter, is_trainable=True)
+    model = PeftModel.from_pretrained(model, args.adapter, adapter_name=train_adapter_name, is_trainable=True)
+    model.load_adapter(args.adapter, adapter_name=ref_adapter_name, is_trainable=False)
+    model.set_adapter(train_adapter_name)
 
     dataset = load_pairs(args.pairs, tokenizer, args.max_seq_length)
     print(f"[dpo] pairs={len(dataset)} beta={args.beta} 4bit={args.load_in_4bit}")
@@ -154,15 +170,16 @@ def main() -> None:
         report_to="none",
         bf16=args.bf16 and torch.cuda.is_available(),
         fp16=not args.bf16 and torch.cuda.is_available(),
+        model_adapter_name=train_adapter_name,
+        ref_adapter_name=ref_adapter_name,
     )
 
     trainer = DPOTrainer(
         model=model,
         ref_model=None,
         args=training_args,
-        beta=args.beta,
         train_dataset=dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
     trainer.train()
     final_dir = args.output_dir / "checkpoint-final"
