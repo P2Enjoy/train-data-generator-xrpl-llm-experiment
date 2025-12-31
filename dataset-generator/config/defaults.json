@@ -1,7 +1,7 @@
 {
   "dataset_generation": {
     "prompts_path": "data/domain_prompts.jsonl",
-    "examples_per_schema": 600,
+    "examples_per_schema": 60,
     "min_operators": 4,
     "max_operators": 7,
     "max_retries": 10,
@@ -26,7 +26,7 @@
     "weight_decay": 0.01,
     "warmup_steps": 50,
     "num_epochs": 20.0,
-    "max_steps": 30000,
+    "max_steps": 35000,
     "logging_steps": 10,
     "eval_steps": 50,
     "save_steps": 200,
@@ -35,7 +35,7 @@
     "eval_max_samples": 256,
     "eval_accumulation_steps": 2,
     "early_stop_min_delta": 0.001,
-    "early_stop_patience": 2,
+    "early_stop_patience": 3,
     "max_grad_norm": 1.0,
     "max_samples": null,
     "seed": 3407,

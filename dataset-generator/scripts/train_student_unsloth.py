@@ -235,6 +235,8 @@ def load_corpus(
     if dropped_dupes:
         print(f"[data] dropped {dropped_dupes} duplicate samples before split")
 
+    dataset = dataset.shuffle(seed=seed)
+
     if max_samples:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
 
