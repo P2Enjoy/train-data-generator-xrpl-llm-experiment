@@ -1,12 +1,52 @@
 [
-  { "const": "equals", "description": "Field must exactly equal the provided value." },
-  { "const": "not_equals", "description": "Field must differ from the provided value." },
-  { "const": "like", "description": "Field should fuzzy-match the value (partial / pattern)." },
-  { "const": "in", "description": "Field must be contained in a small set of values." },
-  { "const": "not_in", "description": "Field must not be contained in a given set of values." },
-  { "const": "contains", "description": "Field must contain the substring or keyword." },
-  { "const": "starts_with", "description": "Field must start with the provided prefix." },
-  { "const": "ends_with", "description": "Field must end with the provided suffix." },
-  { "const": "gt", "description": "Field must be greater than the provided value (lexicographic / numeric / date)." },
-  { "const": "lt", "description": "Field must be less than the provided value (lexicographic / numeric / date)." }
+  {
+    "const": "equals",
+    "synonyms": ["equals", "is", "exact_match", "same_as"],
+    "description": "Field must exactly equal the provided value."
+  },
+  {
+    "const": "not_equals",
+    "synonyms": ["not_equals", "is_not", "differs_from", "exclude_match"],
+    "description": "Field must differ from the provided value."
+  },
+  {
+    "const": "like",
+    "synonyms": ["like", "fuzzy_match", "similar_to", "matches_pattern"],
+    "description": "Field should fuzzy-match the value (partial / pattern)."
+  },
+  {
+    "const": "in",
+    "synonyms": ["in", "one_of", "any_of", "within_set"],
+    "description": "Field must be contained in a small set of values."
+  },
+  {
+    "const": "not_in",
+    "synonyms": ["not_in", "none_of", "outside_set", "exclude"],
+    "description": "Field must not be contained in a given set of values."
+  },
+  {
+    "const": "contains",
+    "synonyms": ["contains", "includes", "has", "contains_keyword"],
+    "description": "Field must contain the substring or keyword."
+  },
+  {
+    "const": "starts_with",
+    "synonyms": ["starts_with", "prefix", "begins_with", "prefix_match"],
+    "description": "Field must start with the provided prefix."
+  },
+  {
+    "const": "ends_with",
+    "synonyms": ["ends_with", "suffix", "finishes_with", "suffix_match"],
+    "description": "Field must end with the provided suffix."
+  },
+  {
+    "const": "gt",
+    "synonyms": ["gt", "greater_than", "after", "above"],
+    "description": "Field must be greater than the provided value (lexicographic / numeric / date)."
+  },
+  {
+    "const": "lt",
+    "synonyms": ["lt", "less_than", "before", "below"],
+    "description": "Field must be less than the provided value (lexicographic / numeric / date)."
+  }
 ]

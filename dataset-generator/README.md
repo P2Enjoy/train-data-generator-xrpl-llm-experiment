@@ -287,6 +287,7 @@ Key flags:
 - `--domain-specs`: input from `generate_domain_specs.py`
 - `--operator-catalog`: operator pool (`data/operator_catalog.json`)
 - `--min-operators` / `--max-operators`: sampled per schema to vary operator vocab
+- Operator catalog entries now include `synonyms`; each retained operator is assigned one alias per schema to force readers to rely on the descriptions.
 
 #### `scripts/generate_dataset.py`
 

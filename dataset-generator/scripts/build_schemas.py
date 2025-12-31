@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         "--operator-catalog",
         type=Path,
         default=Path("data/operator_catalog.json"),
-        help="JSON array of operator const/description pairs to sample from.",
+        help="JSON array of operator definitions with descriptions and synonyms to sample from.",
     )
     parser.add_argument(
         "--min-operators",
@@ -70,28 +70,64 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args(remaining)
 
 
-def normalize_operators(operators: Any) -> List[Dict[str, str]]:
-    normalized: List[Dict[str, str]] = []
+def normalize_operators(operators: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
     if not isinstance(operators, list):
         return normalized
     for op in operators:
-        if isinstance(op, dict) and "const" in op:
-            normalized.append({"const": str(op["const"]), "description": str(op.get("description", ""))})
+        if isinstance(op, dict):
+            canonical = str(op.get("canonical") or op.get("const") or "").strip()
+            if not canonical:
+                continue
+            description = str(op.get("description", ""))
+            synonyms_raw = op.get("synonyms") or []
+            synonyms: List[str] = []
+            if isinstance(synonyms_raw, list):
+                for synonym in synonyms_raw:
+                    value = str(synonym).strip()
+                    if value:
+                        synonyms.append(value)
+            options: List[str] = []
+            seen: set[str] = set()
+            for token in [canonical, op.get("const"), *synonyms]:
+                if token is None:
+                    continue
+                value = str(token).strip()
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                options.append(value)
+            normalized.append({"canonical": canonical, "const": op.get("const") or canonical, "description": description, "synonyms": options})
         elif isinstance(op, str):
-            normalized.append({"const": op, "description": ""})
+            value = op.strip()
+            if not value:
+                continue
+            normalized.append({"canonical": value, "const": value, "description": "", "synonyms": [value]})
     return normalized
 
 
-def load_operator_catalog(path: Path) -> List[Dict[str, str]]:
+def load_operator_catalog(path: Path) -> List[Dict[str, Any]]:
     operators = normalize_operators(load_json(path))
     if not operators:
         raise ValueError(f"No valid operators found in {path}")
     return operators
 
 
+def finalize_operator(op: Dict[str, Any], rng: random.Random | None) -> Dict[str, str]:
+    canonical = str(op.get("canonical") or op.get("const") or "").strip()
+    description = str(op.get("description", ""))
+    synonyms = [item for item in op.get("synonyms") or [] if item]
+    if canonical and canonical not in synonyms:
+        synonyms.insert(0, canonical)
+    if not synonyms:
+        synonyms = [canonical]
+    chosen = rng.choice(synonyms) if rng else str(op.get("const") or synonyms[0])
+    return {"const": chosen, "canonical": canonical, "description": description}
+
+
 def choose_operators(
     spec: Dict[str, Any],
-    catalog: List[Dict[str, str]],
+    catalog: List[Dict[str, Any]],
     rng: random.Random,
     min_count: int,
     max_count: int,
@@ -99,13 +135,14 @@ def choose_operators(
     # Honor explicitly provided operators on the spec if present.
     explicit = normalize_operators(spec.get("operators"))
     if explicit:
-        return explicit
+        return [finalize_operator(op, None) for op in explicit]
 
     max_available = len(catalog)
     lower = max(1, min(min_count, max_available))
     upper = max(lower, min(max_count, max_available))
     count = rng.randint(lower, upper)
-    return rng.sample(catalog, k=count)
+    sampled = rng.sample(catalog, k=count)
+    return [finalize_operator(op, rng) for op in sampled]
 
 
 def build_field_one_of(fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -145,7 +182,9 @@ def build_schema(spec: Dict[str, Any], template: Dict[str, Any], operators: List
 
     fields = spec.get("fields", [])
     condition_schema["properties"]["field"]["oneOf"] = build_field_one_of(fields)
-    condition_schema["properties"]["operator"]["oneOf"] = operators
+    condition_schema["properties"]["operator"]["oneOf"] = [
+        {"const": op["const"], "description": op.get("description", "")} for op in operators
+    ]
     condition_schema["allOf"] = build_enum_rules(fields)
     return schema
 
