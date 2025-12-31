@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+LOG_DIR="${ROOT}/outputs/logs"
+mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/runAll_$(date '+%Y%m%d_%H%M%S').log"
+exec > >(tee "${LOG_FILE}") 2>&1
+
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
 
 log() {
@@ -65,6 +70,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+log "Logging to ${LOG_FILE}"
 log "Starting dataset generation with config=${CONFIG_PATH}"
 "$ROOT/runDatasetGeneration.sh" "${MODEL_ARG[@]}" --config "${CONFIG_PATH}"
 
