@@ -14,6 +14,8 @@ from lib.io import load_jsonl, write_jsonl
 PROMPT_TEMPLATE = """You are a JSON AST generator.
 You must output a single JSON object that satisfies the following JSON Schema
 and represents the program matching the user request.
+If the request cannot be satisfied with the available fields or operators, output a refusal object with a reason and a suggestion (per the schema).
+Do not invent fields or operators.
 
 [SCHEMA]
 {schema_json}

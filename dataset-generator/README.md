@@ -4,7 +4,7 @@ This repository is a **complete, teacher-in-the-loop pipeline** to build a small
 
 - Read a **JSON Schema** describing a DSL
 - Read a natural language **query** (EN/FR)
-- Output **one JSON object** (an AST) that **validates against the schema** and matches the query intent
+- Output **one JSON object** (an AST) that **validates against the schema** and matches the query intent, or a refusal with a reason + suggestion when the schema cannot satisfy the request
 
 The teacher is a local **Ollama** model (configured via `.llmrc` or `LLM_MODEL`). The student is **Gemma 3 270M** fine-tuned with **Unsloth LoRA**. After SFT, the repo runs a **teacher‑aligned preference tuning step (DPO)** using teacher verdicts.
 
@@ -290,11 +290,12 @@ Key flags:
 
 #### `scripts/generate_dataset.py`
 
-Purpose: build `(schema, query) → AST` training rows by calling the teacher and validating against JSON Schema; then synthesize invalid negatives.
+Purpose: build `(schema, query) → AST` training rows by sampling fields/operators, validating against JSON Schema, and adding refusal outputs when a request is not satisfiable; then synthesize invalid negatives.
 
 Key flags:
-- `--positives-per-schema`: how many validated teacher rows to keep per schema
+- `--positives-per-schema`: how many validated rows to keep per schema
 - `--negative-ratio`: how many invalid negatives per positive
+- `--refusals-per-schema`: how many refusal samples to synthesize per schema
 - `--seed`: controls deterministic sampling/mutations
 
 #### `scripts/build_training_corpus.py`
@@ -342,7 +343,7 @@ Key flags:
 - `--adapter`: LoRA checkpoint dir to evaluate
 - `--dataset`: dataset JSONL (defaults to `outputs/d_03_dataset.jsonl`)
 - `--teacher-model`: Ollama model id (required for DPO alignment inputs)
-- `--out-dir`: where to write `evaluation_results.jsonl` + `evaluation_summary.json`
+- `--eval-results`: where to write per-sample JSONL (defaults to `alignment.eval_results`; `--out-dir` still works)
 - Generation: `--max-new-tokens`, `--temperature`, `--top-p`
 - Sampling: `--max-samples`, `--include-invalid`
 
@@ -412,6 +413,7 @@ These settings control how much data you generate, how diverse it is, and where 
   - `training_corpus_out` (`outputs/d_04_training_corpus.jsonl`): prompt/completion pairs for SFT.
 - `positives_per_schema` (`250`): validated “good” teacher samples per schema. This is the main knob for dataset size.
 - `negative_ratio` (`0.6`): approximate negatives per positive (so per schema you get ~`positives_per_schema * (1 + negative_ratio)` rows; with 250 and 0.6 → ~400 rows/schema).
+- `refusals_per_schema` (`20`): number of refusal samples per schema when a request is not satisfiable; each includes a reason and a suggested alternative.
 
 ### `training` (SFT / LoRA on Gemma 3 270M)
 
@@ -478,6 +480,7 @@ These settings control the post-SFT preference tuning step.
 
 **Inputs/outputs**
 - `eval_results` (`outputs/student_runs/eval/evaluation_results.jsonl`): must contain teacher fields (so eval must be run with `--teacher-model`).
+- `eval_summary` (`outputs/student_runs/eval/evaluation_summary.json`): aggregate metrics written alongside `eval_results`.
 - `pairs_out` (`outputs/student_runs/alignment/dpo_pairs.jsonl`): the preference dataset produced by `build_alignment_pairs.py`.
 - `adapter` (`outputs/student_runs/gemma3-270m/checkpoint-final`): starting point for DPO (your SFT LoRA).
 - `output_dir` (`outputs/student_runs/gemma3-270m-dpo`): where the aligned adapter is saved.

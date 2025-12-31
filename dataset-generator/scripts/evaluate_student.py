@@ -26,6 +26,8 @@ from model_config import default_model
 PROMPT_TEMPLATE = """You are a JSON AST generator.
 You must output a single JSON object that satisfies the following JSON Schema
 and represents the program matching the user request.
+If the request cannot be satisfied with the available fields or operators, output a refusal object with a reason and a suggestion (per the schema).
+Do not invent fields or operators.
 
 [SCHEMA]
 {schema_json}
@@ -67,11 +69,12 @@ def parse_args() -> argparse.Namespace:
     base_model_default = str(training_defaults.get("base_model", "unsloth/gemma-3-270m-it"))
     max_seq_length_default = int(training_defaults.get("max_seq_length", 2048))
     load_in_4bit_default = bool(training_defaults.get("load_in_4bit", True))
-    eval_results = alignment_defaults.get("eval_results")
-    if eval_results:
-        out_dir_default = Path(eval_results).parent
-    else:
-        out_dir_default = Path("outputs/student_runs/eval")
+    eval_results_default = Path(
+        alignment_defaults.get("eval_results") or "outputs/student_runs/eval/evaluation_results.jsonl"
+    )
+    eval_summary_default = Path(
+        alignment_defaults.get("eval_summary") or eval_results_default.parent / "evaluation_summary.json"
+    )
 
     parser = argparse.ArgumentParser(
         description="Evaluate student LoRA adapters on held-out samples.", parents=[config_parser]
@@ -106,7 +109,24 @@ def parse_args() -> argparse.Namespace:
         default=load_in_4bit_default,
         help="Load student in 4-bit for eval (default: on).",
     )
-    parser.add_argument("--out-dir", type=Path, default=out_dir_default, help="Where to store logs.")
+    parser.add_argument(
+        "--eval-results",
+        type=Path,
+        default=eval_results_default,
+        help="Where to write per-sample evaluation JSONL (default: alignment.eval_results from config).",
+    )
+    parser.add_argument(
+        "--eval-summary",
+        type=Path,
+        default=eval_summary_default,
+        help="Where to write evaluation metrics JSON (default: alignment.eval_summary or alongside --eval-results).",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Deprecated: directory to place evaluation outputs (overrides --eval-results parent).",
+    )
     parser.add_argument(
         "--teacher-model",
         type=str,
@@ -119,7 +139,11 @@ def parse_args() -> argparse.Namespace:
         default=25,
         help="Print progress every N samples.",
     )
-    return parser.parse_args(remaining)
+    args = parser.parse_args(remaining)
+    args.config = config_args.config
+    args.eval_results_default = eval_results_default
+    args.eval_summary_default = eval_summary_default
+    return args
 
 
 def load_student(
@@ -164,6 +188,8 @@ Instructions:
 - DO NOT rewrite or correct the AST; only judge it.
 - Require that the AST is semantically consistent with the query (fields, operators, values, timeframe).
 - If the AST misses key intent from the query, or contradicts it, mark it as not good.
+- If the query cannot be satisfied with the available fields/operators, a refusal object with a reason and suggestion is the correct response.
+- If the candidate AST is a refusal but the query is answerable with the schema, mark it as not good.
 - Respond ONLY with a JSON object of the form:
   {{"is_good": true/false, "reason": "short justification"}}
 
@@ -186,6 +212,8 @@ Instructions:
 
 def semantic_signature(ast: Dict[str, Any]) -> str:
     """Canonicalize AST semantics (ignores prompt/name/description, sorts conditions)."""
+    if "refusal" in ast:
+        return canonical_json({"refusal": True})
     normalized = {"timeframe": ast.get("timeframe")}
     steps = []
     for step in ast.get("steps") or []:
@@ -341,6 +369,19 @@ def main() -> None:
     if not args.teacher_model:
         raise SystemExit("Teacher model is required; set LLM_MODEL or .llmrc to an ollama model id.")
 
+    if args.out_dir:
+        eval_results_path = args.out_dir / "evaluation_results.jsonl"
+        eval_summary_path = args.out_dir / "evaluation_summary.json"
+    else:
+        eval_results_path = args.eval_results
+        eval_summary_path = args.eval_summary
+        if (
+            args.eval_summary == args.eval_summary_default
+            and args.eval_results != args.eval_results_default
+        ):
+            eval_summary_path = args.eval_results.parent / "evaluation_summary.json"
+    out_dir = eval_results_path.parent
+
     dataset = load_dataset("json", data_files=str(args.dataset), split="train")
     if not args.include_invalid:
         dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))
@@ -374,9 +415,9 @@ def main() -> None:
             print(f"[eval] processed {idx}/{len(dataset)}")
 
     summary = summarize(results)
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(args.out_dir / "evaluation_results.jsonl", results)
-    (args.out_dir / "evaluation_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(eval_results_path, results)
+    eval_summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 
 

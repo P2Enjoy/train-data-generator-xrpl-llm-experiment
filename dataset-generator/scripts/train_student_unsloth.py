@@ -57,6 +57,8 @@ from transformers import TrainerCallback, TrainerControl, TrainerState
 SYSTEM_PROMPT = (
     "You are a JSON AST generator. You must output a single JSON object that satisfies the"
     " provided JSON Schema and represents the program matching the user request."
+    " If the request cannot be satisfied with the available fields or operators, output a refusal"
+    " object with a reason and a suggestion (per the schema)."
 )
 
 DEFAULT_BASE_MODEL = "unsloth/gemma-3-270m-it"

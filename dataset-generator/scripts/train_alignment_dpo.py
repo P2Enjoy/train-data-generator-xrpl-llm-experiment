@@ -19,6 +19,8 @@ from lib.config import DEFAULT_CONFIG_PATH, load_section
 SYSTEM_PROMPT = (
     "You are a JSON AST generator. You must output a single JSON object that satisfies the"
     " provided JSON Schema and represents the program matching the user request."
+    " If the request cannot be satisfied with the available fields or operators, output a refusal"
+    " object with a reason and a suggestion (per the schema)."
 )
 GEMMA3_INSTRUCTION_PART = "<start_of_turn>user\n"
 GEMMA3_RESPONSE_PART = "<start_of_turn>model\n"

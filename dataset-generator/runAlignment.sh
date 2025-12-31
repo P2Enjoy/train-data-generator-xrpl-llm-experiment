@@ -62,7 +62,15 @@ PY
 
 ADAPTER_DEFAULT="$(default_from_config "adapter")"
 EVAL_RESULTS_DEFAULT="$(default_from_config "eval_results")"
+EVAL_SUMMARY_DEFAULT="$(default_from_config "eval_summary")"
 PAIRS_OUT_DEFAULT="$(default_from_config "pairs_out")"
+
+if [[ -z "${EVAL_RESULTS_DEFAULT}" ]]; then
+  EVAL_RESULTS_DEFAULT="outputs/student_runs/eval/evaluation_results.jsonl"
+fi
+if [[ -z "${EVAL_SUMMARY_DEFAULT}" ]]; then
+  EVAL_SUMMARY_DEFAULT="$(dirname "${EVAL_RESULTS_DEFAULT}")/evaluation_summary.json"
+fi
 
 ADAPTER="${ADAPTER_OVERRIDE:-$ADAPTER_DEFAULT}"
 
@@ -74,6 +82,8 @@ echo "Running teacher evaluation (required for alignment pairs)..."
 PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
   --config "${CONFIG_PATH}" \
   --adapter "${ADAPTER}" \
+  --eval-results "${EVAL_RESULTS_DEFAULT}" \
+  --eval-summary "${EVAL_SUMMARY_DEFAULT}" \
   "${TEACHER_ARG[@]}"
 
 echo "Building preference pairs..."
