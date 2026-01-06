@@ -79,15 +79,15 @@ def parse_args() -> argparse.Namespace:
     defaults = load_section("training", config_args.config)
     data_defaults = load_section("dataset_generation", config_args.config)
 
+    if not defaults.get("training_corpus") and not data_defaults.get("training_corpus_out"):
+        raise SystemExit("training.training_corpus or dataset_generation.training_corpus_out must be set in config/defaults.json.")
+
     parser = argparse.ArgumentParser(description="Fine-tune Gemma 3 270M with Unsloth LoRA adapters.", parents=[config_parser])
     parser.add_argument(
         "--training-corpus",
         type=Path,
         default=Path(
-            defaults.get(
-                "training_corpus",
-                data_defaults.get("training_corpus_out", "outputs/d_04_training_corpus.jsonl"),
-            )
+            defaults.get("training_corpus") or data_defaults["training_corpus_out"]
         ),
         help="JSONL produced by build_training_corpus.py.",
     )

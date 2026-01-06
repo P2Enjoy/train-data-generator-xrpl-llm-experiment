@@ -76,17 +76,20 @@ def parse_args() -> argparse.Namespace:
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("dataset_generation", config_args.config)
 
+    if not defaults.get("final_schemas_out") or not defaults.get("dataset_out"):
+        raise SystemExit("dataset_generation.final_schemas_out and dataset_out must be set in config/defaults.json.")
+
     parser = argparse.ArgumentParser(description="Generate dataset JSONL.", parents=[config_parser])
     parser.add_argument(
         "--schemas",
         type=Path,
-        default=Path(defaults.get("final_schemas_out", "outputs/d_02_final_schemas.jsonl")),
+        default=Path(defaults["final_schemas_out"]),
         help="JSONL produced by build_schemas.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(defaults.get("dataset_out", "outputs/d_03_dataset.jsonl")),
+        default=Path(defaults["dataset_out"]),
         help="Where to write dataset JSONL.",
     )
     parser.add_argument(

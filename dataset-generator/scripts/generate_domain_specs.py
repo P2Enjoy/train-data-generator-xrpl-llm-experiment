@@ -31,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     )
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("dataset_generation", config_args.config)
+    if not defaults.get("schema_specs_out"):
+        raise SystemExit("dataset_generation.schema_specs_out must be set in config/defaults.json.")
     parser = argparse.ArgumentParser(description="Generate domain specs JSONL.", parents=[config_parser])
     parser.add_argument(
         "--prompts",
@@ -41,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(defaults.get("schema_specs_out", "outputs/d_01_domain_specs.jsonl")),
+        default=Path(defaults["schema_specs_out"]),
         help="Where to write JSONL specs.",
     )
     parser.add_argument(

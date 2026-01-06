@@ -24,6 +24,9 @@ def parse_args() -> argparse.Namespace:
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("dataset_generation", config_args.config)
 
+    if not defaults.get("schema_specs_out") or not defaults.get("final_schemas_out"):
+        raise SystemExit("dataset_generation.schema_specs_out and final_schemas_out must be set in config/defaults.json.")
+
     parser = argparse.ArgumentParser(description="Build per-domain JSON Schemas.", parents=[config_parser])
     parser.add_argument(
         "--base-template",
@@ -34,13 +37,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--domain-specs",
         type=Path,
-        default=Path(defaults.get("schema_specs_out", "outputs/domain_specs.jsonl")),
+        default=Path(defaults["schema_specs_out"]),
         help="JSONL file produced by generate_domain_specs.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(defaults.get("final_schemas_out", "outputs/final_schemas.jsonl")),
+        default=Path(defaults["final_schemas_out"]),
         help="Where to write JSONL with full schemas.",
     )
     parser.add_argument(

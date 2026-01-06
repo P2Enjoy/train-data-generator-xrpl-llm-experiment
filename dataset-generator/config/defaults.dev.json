@@ -16,6 +16,10 @@
     "offline_fallback": false,
     "max_retries": -1
   },
+  "evaluation": {
+    "eval_results": "outputs/dev/student_runs/eval/evaluation_results.jsonl",
+    "eval_summary": "outputs/dev/student_runs/eval/evaluation_summary.json"
+  },
   "training": {
     "training_corpus": "outputs/dev/d_04_training_corpus.jsonl",
     "output_dir": "outputs/dev/student_runs/gemma3-270m",
@@ -64,5 +68,8 @@
     "beta": 0.1,
     "load_in_4bit": true,
     "bf16": true
+  },
+  "reporting": {
+    "reports_dir": "outputs/dev/reports"
   }
 }

@@ -15,6 +15,10 @@
     "negative_ratio": 0.6,
     "refusals_per_schema": 200
   },
+  "evaluation": {
+    "eval_results": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_results.jsonl",
+    "eval_summary": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_summary.json"
+  },
   "training": {
     "training_corpus": "outputs/d_04_training_corpus.jsonl",
     "output_dir": "outputs/student_runs/gemma3-270m",
@@ -47,9 +51,9 @@
     "lora_dropout": 0.05
   },
   "alignment": {
-    "pairs_out": "outputs/student_runs/alignment/dpo_pairs.jsonl",
-    "eval_results": "outputs/student_runs/eval/evaluation_results.jsonl",
-    "eval_summary": "outputs/student_runs/eval/evaluation_summary.json",
+    "pairs_out": "outputs/student_runs/alignment-gemma-3-270m-it/dpo_pairs.jsonl",
+    "eval_results": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_results.jsonl",
+    "eval_summary": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_summary.json",
     "base_model": "unsloth/gemma-3-270m-it",
     "adapter": "outputs/student_runs/gemma3-270m/checkpoint-final",
     "output_dir": "outputs/student_runs/gemma3-270m-dpo",
@@ -63,5 +67,8 @@
     "beta": 0.1,
     "load_in_4bit": true,
     "bf16": true
+  },
+  "reporting": {
+    "reports_dir": "outputs/reports/gemma-3-270m-it"
   }
 }

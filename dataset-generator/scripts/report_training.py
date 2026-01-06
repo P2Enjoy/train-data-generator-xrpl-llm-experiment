@@ -12,39 +12,66 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import load_jsonl
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate training/eval report.")
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to defaults JSON (config/defaults.json).",
+    )
+    config_args, remaining = config_parser.parse_known_args()
+
+    training_defaults = load_section("training", config_args.config)
+    alignment_defaults = load_section("alignment", config_args.config)
+    evaluation_defaults = load_section("evaluation", config_args.config)
+    reporting_defaults = load_section("reporting", config_args.config)
+
+    training_output_dir = training_defaults.get("output_dir")
+    eval_results_default = evaluation_defaults.get("eval_results") or alignment_defaults.get("eval_results")
+    eval_summary_default = evaluation_defaults.get("eval_summary") or alignment_defaults.get("eval_summary")
+    reports_dir_default = reporting_defaults.get("reports_dir")
+
+    if not training_output_dir:
+        raise SystemExit("training.output_dir must be set in config/defaults.json.")
+    if not eval_results_default or not eval_summary_default:
+        raise SystemExit("evaluation.eval_results/eval_summary (or alignment overrides) must be set in config/defaults.json.")
+    if not reports_dir_default:
+        raise SystemExit("reporting.reports_dir must be set in config/defaults.json.")
+
+    parser = argparse.ArgumentParser(description="Generate training/eval report.", parents=[config_parser])
     parser.add_argument(
         "--training-metrics",
         type=Path,
-        default=Path("outputs/student_runs/gemma3-270m/training_metrics.jsonl"),
+        default=Path(training_output_dir) / "training_metrics.jsonl",
         help="JSONL produced by train_student_unsloth.py callback.",
     )
     parser.add_argument(
         "--eval-summary",
         type=Path,
-        default=Path("outputs/student_runs/eval/evaluation_summary.json"),
+        default=Path(eval_summary_default),
         help="Summary JSON produced by evaluate_student.py.",
     )
     parser.add_argument(
         "--eval-results",
         type=Path,
-        default=Path("outputs/student_runs/eval/evaluation_results.jsonl"),
+        default=Path(eval_results_default),
         help="Per-sample JSONL produced by evaluate_student.py.",
     )
     parser.add_argument(
         "--run-config",
         type=Path,
-        default=Path("outputs/student_runs/gemma3-270m/run_config.json"),
+        default=Path(training_output_dir) / "run_config.json",
         help="Config emitted by train_student_unsloth.py.",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("outputs/reports"),
+        default=Path(reports_dir_default),
         help="Directory to write plots and report to.",
     )
     parser.add_argument(
@@ -53,7 +80,7 @@ def parse_args() -> argparse.Namespace:
         default="student_training_report.md",
         help="Filename for the generated Markdown report.",
     )
-    return parser.parse_args()
+    return parser.parse_args(remaining)
 
 
 def plot_training_curves(df: pd.DataFrame, out_dir: Path) -> List[Path]:
@@ -94,17 +121,45 @@ def plot_training_curves(df: pd.DataFrame, out_dir: Path) -> List[Path]:
 
 
 def plot_eval_histogram(df: pd.DataFrame, out_dir: Path) -> Path | None:
-    if df.empty or "schema_valid" not in df:
+    if df.empty:
         return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def label_outcome(row: pd.Series) -> str:
+        parsed = bool(row.get("parsed"))
+        schema_ok = bool(row.get("schema_valid"))
+        verdict = row.get("teacher_verdict")
+        if not parsed:
+            return "Parse failed"
+        if not schema_ok:
+            return "Schema invalid"
+        if verdict is True:
+            return "Teacher accepted"
+        if verdict is False:
+            return "Teacher rejected"
+        return "No teacher verdict"
+
     plot_df = df.copy()
-    if "exact_match" not in plot_df:
-        plot_df["exact_match"] = False
-    else:
-        plot_df["exact_match"] = plot_df["exact_match"].fillna(False)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    sns.countplot(data=plot_df, x="schema_valid", hue="exact_match", ax=ax)
-    ax.set_xlabel("Schema valid")
+    plot_df["outcome"] = plot_df.apply(label_outcome, axis=1)
+
+    order = [
+        label
+        for label in (
+            "Teacher accepted",
+            "Teacher rejected",
+            "Schema invalid",
+            "Parse failed",
+            "No teacher verdict",
+        )
+        if label in set(plot_df["outcome"])
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    sns.countplot(data=plot_df, x="outcome", order=order or None, ax=ax, color="tab:blue")
+    ax.set_xlabel("Outcome (teacher + schema)")
     ax.set_ylabel("Count")
+    ax.tick_params(axis="x", rotation=20)
     hist_path = out_dir / "eval_outcomes.png"
     fig.tight_layout()
     fig.savefig(hist_path, dpi=200)
@@ -175,12 +230,15 @@ def main() -> None:
         key_rates = {
             "Parsed": eval_summary.get("parsed_rate", 0.0),
             "Schema valid": eval_summary.get("schema_valid_rate", 0.0),
-            "Exact match": eval_summary.get("exact_match_rate", 0.0),
         }
         if "teacher_accept_rate" in eval_summary:
             key_rates["Teacher accept"] = eval_summary.get("teacher_accept_rate", 0.0)
         if "semantic_pass_rate" in eval_summary:
             key_rates["Semantic pass"] = eval_summary.get("semantic_pass_rate", 0.0)
+        if "teacher_agreement_rate" in eval_summary:
+            key_rates["Teacher agreement"] = eval_summary.get("teacher_agreement_rate", 0.0)
+        if "exact_match_rate" in eval_summary:
+            key_rates["Exact match"] = eval_summary.get("exact_match_rate", 0.0)
         rate_plot = plot_rate_bars(key_rates, plot_dir, "Evaluation rates", "eval_rates.png")
 
     # Teacher vs schema confusion plot
@@ -209,17 +267,18 @@ def main() -> None:
         lines.append("## Evaluation KPIs")
         lines.append(f"- Parsed: {eval_summary.get('parsed_rate', 0):.1%}")
         lines.append(f"- Schema valid: {eval_summary.get('schema_valid_rate', 0):.1%}")
-        lines.append(f"- Exact match: {eval_summary.get('exact_match_rate', 0):.1%}")
+        if "teacher_accept_rate" in eval_summary:
+            lines.append(f"- Teacher acceptance: {eval_summary.get('teacher_accept_rate', 0):.1%}")
+        if "semantic_pass_rate" in eval_summary:
+            lines.append(f"- Semantic pass (schema valid + teacher OK): {eval_summary.get('semantic_pass_rate', 0):.1%}")
         if "teacher_agreement_rate" in eval_summary:
             lines.append(f"- Teacher agreement (canonical): {eval_summary.get('teacher_agreement_rate', 0):.1%}")
         if "semantic_match_target_rate" in eval_summary:
             lines.append(f"- Semantic match to target: {eval_summary.get('semantic_match_target_rate', 0):.1%}")
         if "semantic_match_teacher_rate" in eval_summary:
             lines.append(f"- Semantic match to teacher: {eval_summary.get('semantic_match_teacher_rate', 0):.1%}")
-        if "teacher_accept_rate" in eval_summary:
-            lines.append(f"- Teacher acceptance: {eval_summary.get('teacher_accept_rate', 0):.1%}")
-        if "semantic_pass_rate" in eval_summary:
-            lines.append(f"- Semantic pass (schema valid + teacher OK): {eval_summary.get('semantic_pass_rate', 0):.1%}")
+        if "exact_match_rate" in eval_summary:
+            lines.append(f"- Exact match: {eval_summary.get('exact_match_rate', 0):.1%}")
 
     if train_plots:
         lines.append("")

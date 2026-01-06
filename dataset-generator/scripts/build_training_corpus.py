@@ -43,18 +43,20 @@ def parse_args() -> argparse.Namespace:
     )
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("dataset_generation", config_args.config)
+    if not defaults.get("dataset_out") or not defaults.get("training_corpus_out"):
+        raise SystemExit("dataset_generation.dataset_out and training_corpus_out must be set in config/defaults.json.")
 
     parser = argparse.ArgumentParser(description="Build training corpus JSONL.", parents=[config_parser])
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path(defaults.get("dataset_out", "outputs/d_03_dataset.jsonl")),
+        default=Path(defaults["dataset_out"]),
         help="JSONL produced by generate_dataset.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(defaults.get("training_corpus_out", "outputs/d_04_training_corpus.jsonl")),
+        default=Path(defaults["training_corpus_out"]),
         help="Where to write prompt/response JSONL.",
     )
     parser.add_argument(

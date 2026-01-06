@@ -38,11 +38,16 @@ def parse_args() -> argparse.Namespace:
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("alignment", config_args.config)
 
+    required_keys = ("pairs_out", "adapter", "output_dir")
+    missing = [key for key in required_keys if not defaults.get(key)]
+    if missing:
+        raise SystemExit(f"Missing alignment config keys in config/defaults.json: {', '.join(missing)}")
+
     parser = argparse.ArgumentParser(description="Preference fine-tune with DPO/ORPO.", parents=[config_parser])
     parser.add_argument(
         "--pairs",
         type=Path,
-        default=Path(defaults.get("pairs_out", "outputs/student_runs/alignment/dpo_pairs.jsonl")),
+        default=Path(defaults["pairs_out"]),
         help="Preference pairs produced by build_alignment_pairs.py.",
     )
     parser.add_argument(
@@ -54,13 +59,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--adapter",
         type=Path,
-        default=Path(defaults.get("adapter", "outputs/student_runs/gemma3-270m/checkpoint-final")),
+        default=Path(defaults["adapter"]),
         help="Starting LoRA checkpoint from SFT stage.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(defaults.get("output_dir", "outputs/student_runs/gemma3-270m-dpo")),
+        default=Path(defaults["output_dir"]),
         help="Where to write the aligned adapters.",
     )
     parser.add_argument("--max-seq-length", type=int, default=int(defaults.get("max_seq_length", 2048)), help="Max sequence length.")
@@ -135,8 +140,9 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    train_adapter_name = "train"
-    ref_adapter_name = "reference"
+    # Avoid names that shadow existing module attributes (e.g., ".train").
+    train_adapter_name = "dpo_train"
+    ref_adapter_name = "dpo_reference"
 
     model, tokenizer = FastModel.from_pretrained(
         model_name=args.base_model,

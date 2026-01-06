@@ -23,17 +23,20 @@ def parse_args() -> argparse.Namespace:
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("alignment", config_args.config)
 
+    if not defaults.get("eval_results") or not defaults.get("pairs_out"):
+        raise SystemExit("alignment.eval_results and alignment.pairs_out must be set in config/defaults.json.")
+
     parser = argparse.ArgumentParser(description="Create chosen/rejected pairs from evaluate_student outputs.", parents=[config_parser])
     parser.add_argument(
         "--eval-results",
         type=Path,
-        default=Path(defaults.get("eval_results", "outputs/student_runs/eval/evaluation_results.jsonl")),
+        default=Path(defaults["eval_results"]),
         help="Per-sample JSONL produced by evaluate_student.py.",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(defaults.get("pairs_out", "outputs/student_runs/alignment/dpo_pairs.jsonl")),
+        default=Path(defaults["pairs_out"]),
         help="Where to write the preference pairs.",
     )
     parser.add_argument(

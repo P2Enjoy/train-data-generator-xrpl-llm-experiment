@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Tuple
 
 import _bootstrap  # noqa: F401
 import torch
-from datasets import load_dataset
+from datasets import Features, Sequence, Value, load_dataset
 from jsonschema import Draft7Validator
 from peft import PeftModel
 from unsloth import FastModel
@@ -58,23 +58,28 @@ def parse_args() -> argparse.Namespace:
     training_defaults = load_section("training", config_args.config)
     data_defaults = load_section("dataset_generation", config_args.config)
     alignment_defaults = load_section("alignment", config_args.config)
+    evaluation_defaults = load_section("evaluation", config_args.config)
 
-    dataset_default = Path(data_defaults.get("dataset_out", "outputs/d_03_dataset.jsonl"))
+    if not data_defaults.get("dataset_out"):
+        raise SystemExit("dataset_generation.dataset_out must be set in config/defaults.json.")
+    dataset_default = Path(data_defaults["dataset_out"])
     adapter_default = alignment_defaults.get("adapter")
     if adapter_default:
         adapter_default_path = Path(adapter_default)
     else:
-        output_dir = training_defaults.get("output_dir", "outputs/student_runs/gemma3-270m")
+        output_dir = training_defaults.get("output_dir")
+        if not output_dir:
+            raise SystemExit("training.output_dir must be set in config/defaults.json.")
         adapter_default_path = Path(output_dir) / "checkpoint-final"
     base_model_default = str(training_defaults.get("base_model", "unsloth/gemma-3-270m-it"))
     max_seq_length_default = int(training_defaults.get("max_seq_length", 2048))
     load_in_4bit_default = bool(training_defaults.get("load_in_4bit", True))
-    eval_results_default = Path(
-        alignment_defaults.get("eval_results") or "outputs/student_runs/eval/evaluation_results.jsonl"
-    )
-    eval_summary_default = Path(
-        alignment_defaults.get("eval_summary") or eval_results_default.parent / "evaluation_summary.json"
-    )
+    eval_results_default = evaluation_defaults.get("eval_results") or alignment_defaults.get("eval_results")
+    eval_summary_default = evaluation_defaults.get("eval_summary") or alignment_defaults.get("eval_summary")
+    if not eval_results_default or not eval_summary_default:
+        raise SystemExit("evaluation.eval_results/eval_summary (or alignment overrides) must be set in config/defaults.json.")
+    eval_results_default_path = Path(eval_results_default)
+    eval_summary_default_path = Path(eval_summary_default)
 
     parser = argparse.ArgumentParser(
         description="Evaluate student LoRA adapters on held-out samples.", parents=[config_parser]
@@ -112,13 +117,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--eval-results",
         type=Path,
-        default=eval_results_default,
+        default=eval_results_default_path,
         help="Where to write per-sample evaluation JSONL (default: alignment.eval_results from config).",
     )
     parser.add_argument(
         "--eval-summary",
         type=Path,
-        default=eval_summary_default,
+        default=eval_summary_default_path,
         help="Where to write evaluation metrics JSON (default: alignment.eval_summary or alongside --eval-results).",
     )
     parser.add_argument(
@@ -326,6 +331,11 @@ def evaluate_sample(
             result["semantic_match_teacher"] = False
             result["teacher_error"] = str(exc)
 
+    # Even when the student output is schema-invalid, keep a teacher verdict so alignment can learn from it.
+    if teacher_model and "teacher_verdict" not in result and result.get("teacher_canonical"):
+        result["teacher_verdict"] = False
+        result.setdefault("teacher_reason", "schema invalid")
+
     if teacher_ok is not None:
         result["semantic_pass"] = bool(result.get("schema_valid") and teacher_ok)
     else:
@@ -382,7 +392,22 @@ def main() -> None:
             eval_summary_path = args.eval_results.parent / "evaluation_summary.json"
     out_dir = eval_results_path.parent
 
-    dataset = load_dataset("json", data_files=str(args.dataset), split="train")
+    # Explicit schema avoids Arrow inferring null-only columns (e.g., validation_error)
+    features = Features(
+        {
+            "schema_id": Value("string"),
+            "domain": Value("string"),
+            "operators": Sequence(Value("string")),
+            "schema_json": Value("string"),
+            "query": Value("string"),
+            "current_date": Value("string"),
+            "ast_json": Value("string"),
+            "is_valid": Value("bool"),
+            "validation_error": Value("string"),
+            "error_type": Value("string"),
+        }
+    )
+    dataset = load_dataset("json", data_files=str(args.dataset), split="train", features=features)
     if not args.include_invalid:
         dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))
     if args.max_samples and len(dataset) > args.max_samples:
