@@ -117,8 +117,9 @@ training_paths=($(jq -r '[
 alignment_paths=($(jq -r '[
   .alignment.pairs_out,
   .alignment.output_dir,
-  .alignment.adapter
-] | map(select(.!=null)) | .[]' "$CONFIG"))
+  .alignment.aligned_eval_results,
+  .alignment.aligned_eval_summary
+ ] | map(select(.!=null)) | .[]' "$CONFIG"))
 
 report_paths=($(jq -r '[
   .reporting.reports_dir
@@ -161,6 +162,8 @@ if "$ALIGNMENT"; then
   for p in "${alignment_paths[@]}"; do
     safe_rm "$(resolve_path "$p")"
   done
+  # Do NOT delete the SFT adapter used as alignment input; that lives under training.output_dir.
+  # Aligned eval artifacts are included above, but the base training run remains intact unless --training is passed.
 fi
 
 if "$REPORT"; then
