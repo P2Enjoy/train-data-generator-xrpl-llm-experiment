@@ -25,6 +25,7 @@ CONFIG_PATH="config/defaults.json"
 ADAPTER_SET=0
 OUT_DIR_SET=0
 EVAL_RESULTS_SET=0
+ORIGINAL_ARGS=("$@")
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -82,6 +83,7 @@ if config_path.exists():
 
 training = defaults.get("training", {}) or {}
 alignment = defaults.get("alignment", {}) or {}
+reporting = defaults.get("reporting", {}) or {}
 
 adapter = alignment.get("adapter")
 if not adapter:
@@ -91,12 +93,25 @@ if not adapter:
 eval_results = alignment.get("eval_results") or "outputs/student_runs/eval/evaluation_results.jsonl"
 eval_summary = alignment.get("eval_summary") or str(Path(eval_results).parent / "evaluation_summary.json")
 
+aligned_out_dir = alignment.get("output_dir", "")
+aligned_adapter = str(Path(aligned_out_dir) / "checkpoint-final") if aligned_out_dir else ""
+aligned_eval_results = alignment.get("aligned_eval_results") or ""
+aligned_eval_summary = alignment.get("aligned_eval_summary") or ""
+if aligned_eval_results and not aligned_eval_summary:
+    aligned_eval_summary = str(Path(aligned_eval_results).parent / "evaluation_summary.json")
+
+reports_dir = reporting.get("reports_dir", "outputs/reports")
+
 print(adapter)
 print(eval_results)
 print(eval_summary)
+print(aligned_adapter)
+print(aligned_eval_results)
+print(aligned_eval_summary)
+print(reports_dir)
 PY
   )"
-  IFS=$'\n' read -r CONFIG_ADAPTER CONFIG_EVAL_RESULTS CONFIG_EVAL_SUMMARY <<< "${config_defaults}"
+  IFS=$'\n' read -r CONFIG_ADAPTER CONFIG_EVAL_RESULTS CONFIG_EVAL_SUMMARY CONFIG_ALIGNED_ADAPTER CONFIG_ALIGNED_EVAL_RESULTS CONFIG_ALIGNED_EVAL_SUMMARY CONFIG_REPORTS_DIR <<< "${config_defaults}"
   if [[ ${ADAPTER_SET} -eq 0 ]]; then
     ADAPTER="${CONFIG_ADAPTER}"
     EVAL_ARGS+=("--adapter" "${ADAPTER}")
@@ -127,6 +142,32 @@ if [[ -z "${EVAL_SUMMARY}" ]]; then
 fi
 
 TRAIN_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
+ALIGNED_ADAPTER="${CONFIG_ALIGNED_ADAPTER:-}"
+ALIGNED_EVAL_RESULTS="${CONFIG_ALIGNED_EVAL_RESULTS:-}"
+ALIGNED_EVAL_SUMMARY="${CONFIG_ALIGNED_EVAL_SUMMARY:-}"
+REPORTS_DIR="${CONFIG_REPORTS_DIR:-outputs/reports}"
+
+if [[ -z "${ALIGNED_EVAL_RESULTS}" && -n "${ALIGNED_ADAPTER}" ]]; then
+  ALIGNED_EVAL_RESULTS="$(dirname "${ALIGNED_ADAPTER}")/../eval-dpo/evaluation_results.jsonl"
+fi
+if [[ -z "${ALIGNED_EVAL_SUMMARY}" && -n "${ALIGNED_EVAL_RESULTS}" ]]; then
+  ALIGNED_EVAL_SUMMARY="$(dirname "${ALIGNED_EVAL_RESULTS}")/evaluation_summary.json"
+fi
+
+# Filter user args to reuse for aligned eval (drop adapter/output overrides)
+COMMON_ARGS=()
+idx=0
+while [[ ${idx} -lt ${#ORIGINAL_ARGS[@]} ]]; do
+  arg="${ORIGINAL_ARGS[$idx]}"
+  case "$arg" in
+    --adapter|--out-dir|--eval-results|--eval-summary)
+      ((idx+=2))
+      continue
+      ;;
+  esac
+  COMMON_ARGS+=("$arg")
+  ((idx++))
+done
 
 echo "Using UV_CACHE_DIR=${UV_CACHE_DIR}"
 echo "Installing / syncing dependencies with uv..."
@@ -141,6 +182,33 @@ PYTHONUNBUFFERED=1 uv run python -u scripts/report_training.py \
   --eval-summary "${EVAL_SUMMARY}" \
   --eval-results "${EVAL_RESULTS}" \
   --run-config "${TRAIN_DIR}/run_config.json" \
-  --out-dir outputs/reports
+  --out-dir "${REPORTS_DIR}"
 
 echo "Evaluation + report complete."
+
+if [[ -n "${ALIGNED_ADAPTER}" && -d "${ALIGNED_ADAPTER}" ]]; then
+  echo "Found alignment adapter at ${ALIGNED_ADAPTER}; running aligned evaluation..."
+  if [[ -f "${ALIGNED_EVAL_RESULTS}" && -f "${ALIGNED_EVAL_SUMMARY}" ]]; then
+    echo "Skipping aligned evaluation; outputs already exist:"
+    echo "  ${ALIGNED_EVAL_RESULTS}"
+    echo "  ${ALIGNED_EVAL_SUMMARY}"
+  else
+    PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
+      --adapter "${ALIGNED_ADAPTER}" \
+      --eval-results "${ALIGNED_EVAL_RESULTS}" \
+      --eval-summary "${ALIGNED_EVAL_SUMMARY}" \
+      "${COMMON_ARGS[@]}"
+  fi
+
+  echo "Building aligned report..."
+  PYTHONUNBUFFERED=1 uv run python -u scripts/report_training.py \
+    --training-metrics "${ALIGNED_ADAPTER}/../training_metrics.jsonl" \
+    --eval-summary "${ALIGNED_EVAL_SUMMARY}" \
+    --eval-results "${ALIGNED_EVAL_RESULTS}" \
+    --run-config "${ALIGNED_ADAPTER}/../run_config.json" \
+    --out-dir "${REPORTS_DIR}" \
+    --report-name alignment_report.md
+  echo "Aligned evaluation + report complete."
+else
+  echo "No alignment adapter found (expected at ${ALIGNED_ADAPTER:-<unset>}); skipping aligned evaluation."
+fi

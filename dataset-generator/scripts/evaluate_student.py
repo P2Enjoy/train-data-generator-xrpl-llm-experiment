@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import builtins
 import json
+import time
 import unsloth
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -76,6 +77,16 @@ def parse_args() -> argparse.Namespace:
     load_in_4bit_default = bool(training_defaults.get("load_in_4bit", True))
     eval_results_default = evaluation_defaults.get("eval_results") or alignment_defaults.get("eval_results")
     eval_summary_default = evaluation_defaults.get("eval_summary") or alignment_defaults.get("eval_summary")
+    eval_max_samples_default = int(evaluation_defaults.get("max_samples", 200) or 200)
+    eval_max_new_tokens_default = int(evaluation_defaults.get("max_new_tokens", 256) or 256)
+    eval_temperature_default = float(evaluation_defaults.get("temperature", 0.2) or 0.2)
+    eval_top_p_default = float(evaluation_defaults.get("top_p", 0.9) or 0.9)
+    eval_include_invalid_default = bool(evaluation_defaults.get("include_invalid", False))
+    sample_seed_default = int(
+        evaluation_defaults.get("sample_seed", training_defaults.get("seed", 3407)) or training_defaults.get("seed", 3407)
+    )
+    teacher_retries_default = int(evaluation_defaults.get("teacher_retries", 3) or 3)
+    teacher_retry_wait_default = float(evaluation_defaults.get("teacher_retry_wait", 1.0) or 1.0)
     if not eval_results_default or not eval_summary_default:
         raise SystemExit("evaluation.eval_results/eval_summary (or alignment overrides) must be set in config/defaults.json.")
     eval_results_default_path = Path(eval_results_default)
@@ -103,11 +114,22 @@ def parse_args() -> argparse.Namespace:
         help="Base model id used during training.",
     )
     parser.add_argument("--max-seq-length", type=int, default=max_seq_length_default, help="Max sequence length.")
-    parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens to generate.")
-    parser.add_argument("--max-samples", type=int, default=200, help="How many rows to evaluate.")
-    parser.add_argument("--include-invalid", action="store_true", help="Include invalid targets during eval.")
-    parser.add_argument("--temperature", type=float, default=0.2, help="Generation temperature.")
-    parser.add_argument("--top-p", type=float, default=0.9, help="Generation top-p.")
+    parser.add_argument("--max-new-tokens", type=int, default=eval_max_new_tokens_default, help="Max tokens to generate.")
+    parser.add_argument("--max-samples", type=int, default=eval_max_samples_default, help="How many rows to evaluate.")
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=sample_seed_default,
+        help="Seed for shuffled sampling when capping with --max-samples (ensures diverse subset).",
+    )
+    parser.add_argument(
+        "--include-invalid",
+        action=argparse.BooleanOptionalAction,
+        default=eval_include_invalid_default,
+        help="Include invalid targets during eval.",
+    )
+    parser.add_argument("--temperature", type=float, default=eval_temperature_default, help="Generation temperature.")
+    parser.add_argument("--top-p", type=float, default=eval_top_p_default, help="Generation top-p.")
     parser.add_argument(
         "--load-in-4bit",
         action=argparse.BooleanOptionalAction,
@@ -125,6 +147,18 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=eval_summary_default_path,
         help="Where to write evaluation metrics JSON (default: alignment.eval_summary or alongside --eval-results).",
+    )
+    parser.add_argument(
+        "--teacher-retries",
+        type=int,
+        default=teacher_retries_default,
+        help="How many times to retry teacher calls when parsing fails.",
+    )
+    parser.add_argument(
+        "--teacher-retry-wait",
+        type=float,
+        default=teacher_retry_wait_default,
+        help="Seconds to wait between teacher retries.",
     )
     parser.add_argument(
         "--out-dir",
@@ -177,11 +211,38 @@ def call_teacher(prompt: str, model: str) -> str:
     return run_ollama(prompt, model)
 
 
+def call_teacher_json(prompt: str, model: str, retries: int, wait: float, label: str = "teacher") -> Dict[str, Any]:
+    """Call the teacher and retry if parsing fails; retries=-1 means infinite."""
+    last_error: Exception | None = None
+    attempt = 0
+    max_label = "∞" if retries < 0 else str(max(retries, 1))
+    while True:
+        attempt += 1
+        try:
+            answer = call_teacher(prompt, model)
+            return extract_json_block(answer)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            print(f"[eval][{label}] attempt {attempt}/{max_label} failed: {exc}")
+            if retries >= 0 and attempt >= max(retries, 1):
+                break
+            time.sleep(wait)
+    assert last_error is not None
+    raise last_error
+
+
 def build_prompt(schema_json: str, query: str, current_date: str) -> str:
     return PROMPT_TEMPLATE.format(schema_json=schema_json, query=query, current_date=current_date or "N/A")
 
 
-def grade_with_teacher(schema_json: str, query: str, student_ast: Dict[str, Any], model: str) -> Tuple[bool, str]:
+def grade_with_teacher(
+    schema_json: str,
+    query: str,
+    student_ast: Dict[str, Any],
+    model: str,
+    retries: int,
+    wait: float,
+) -> Tuple[bool, str]:
     """Ask the teacher model to judge if the student's AST satisfies the query."""
     payload = canonical_json(student_ast)
     prompt = f"""
@@ -208,8 +269,7 @@ Instructions:
 {payload}
 [/CANDIDATE_AST]
 """
-    answer = call_teacher(prompt, model)
-    graded = extract_json_block(answer)
+    graded = call_teacher_json(prompt, model, retries=retries, wait=wait, label="grade")
     is_good = bool(graded.get("is_good"))
     reason = str(graded.get("reason", "") or "")
     return is_good, reason
@@ -247,6 +307,8 @@ def evaluate_sample(
     top_p: float,
     max_new_tokens: int,
     teacher_model: str | None = None,
+    teacher_retries: int = 3,
+    teacher_retry_wait: float = 1.0,
 ) -> Dict[str, Any]:
     prompt_text = build_prompt(sample["schema_json"], sample["query"], sample.get("current_date", ""))
     messages = [
@@ -317,13 +379,24 @@ def evaluate_sample(
     teacher_ok: bool | None = None
     if teacher_model:
         try:
-            teacher_out = call_teacher(prompt_text, teacher_model)
-            teacher_json = extract_json_block(teacher_out)
+            teacher_json = call_teacher_json(
+                prompt_text,
+                teacher_model,
+                retries=teacher_retries,
+                wait=teacher_retry_wait,
+            )
             result["teacher_canonical"] = canonical_json(teacher_json)
             result["matches_teacher"] = result["student_canonical"] == result["teacher_canonical"]
             result["semantic_match_teacher"] = semantic_signature(parsed) == semantic_signature(teacher_json)
             if result.get("schema_valid"):
-                teacher_ok, reason = grade_with_teacher(sample["schema_json"], sample["query"], parsed, teacher_model)
+                teacher_ok, reason = grade_with_teacher(
+                    sample["schema_json"],
+                    sample["query"],
+                    parsed,
+                    teacher_model,
+                    retries=teacher_retries,
+                    wait=teacher_retry_wait,
+                )
                 result["teacher_verdict"] = teacher_ok
                 result["teacher_reason"] = reason
         except Exception as exc:  # noqa: BLE001
@@ -411,7 +484,7 @@ def main() -> None:
     if not args.include_invalid:
         dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))
     if args.max_samples and len(dataset) > args.max_samples:
-        dataset = dataset.select(range(args.max_samples))
+        dataset = dataset.shuffle(seed=args.sample_seed).select(range(args.max_samples))
     if not args.teacher_model:
         print("[eval] teacher disabled (no --teacher-model provided and no .llmrc found)")
     print(
@@ -434,6 +507,8 @@ def main() -> None:
             args.top_p,
             args.max_new_tokens,
             teacher_model=args.teacher_model,
+            teacher_retries=args.teacher_retries,
+            teacher_retry_wait=args.teacher_retry_wait,
         )
         results.append(result)
         if args.log_every and idx % args.log_every == 0:

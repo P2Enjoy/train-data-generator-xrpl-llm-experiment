@@ -17,7 +17,15 @@
   },
   "evaluation": {
     "eval_results": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_results.jsonl",
-    "eval_summary": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_summary.json"
+    "eval_summary": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_summary.json",
+    "max_samples": 200,
+    "max_new_tokens": 256,
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "include_invalid": false,
+    "sample_seed": 3407,
+    "teacher_retries": -1,
+    "teacher_retry_wait": 1.0
   },
   "training": {
     "training_corpus": "outputs/d_04_training_corpus.jsonl",
@@ -54,6 +62,8 @@
     "pairs_out": "outputs/student_runs/alignment-gemma-3-270m-it/dpo_pairs.jsonl",
     "eval_results": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_results.jsonl",
     "eval_summary": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_summary.json",
+    "aligned_eval_results": "outputs/student_runs/eval-gemma-3-270m-it-dpo/evaluation_results.jsonl",
+    "aligned_eval_summary": "outputs/student_runs/eval-gemma-3-270m-it-dpo/evaluation_summary.json",
     "base_model": "unsloth/gemma-3-270m-it",
     "adapter": "outputs/student_runs/gemma3-270m/checkpoint-final",
     "output_dir": "outputs/student_runs/gemma3-270m-dpo",

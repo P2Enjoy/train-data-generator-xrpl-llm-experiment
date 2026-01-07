@@ -18,7 +18,15 @@
   },
   "evaluation": {
     "eval_results": "outputs/dev/student_runs/eval/evaluation_results.jsonl",
-    "eval_summary": "outputs/dev/student_runs/eval/evaluation_summary.json"
+    "eval_summary": "outputs/dev/student_runs/eval/evaluation_summary.json",
+    "max_samples": 50,
+    "max_new_tokens": 128,
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "include_invalid": false,
+    "sample_seed": 3407,
+    "teacher_retries": -1,
+    "teacher_retry_wait": 1.0
   },
   "training": {
     "training_corpus": "outputs/dev/d_04_training_corpus.jsonl",
@@ -55,6 +63,8 @@
     "pairs_out": "outputs/dev/student_runs/alignment/dpo_pairs.jsonl",
     "eval_results": "outputs/dev/student_runs/eval/evaluation_results.jsonl",
     "eval_summary": "outputs/dev/student_runs/eval/evaluation_summary.json",
+    "aligned_eval_results": "outputs/dev/student_runs/eval-dpo/evaluation_results.jsonl",
+    "aligned_eval_summary": "outputs/dev/student_runs/eval-dpo/evaluation_summary.json",
     "base_model": "unsloth/gemma-3-270m-it",
     "adapter": "outputs/dev/student_runs/gemma3-270m/checkpoint-final",
     "output_dir": "outputs/dev/student_runs/gemma3-270m-dpo",

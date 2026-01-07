@@ -20,6 +20,7 @@ Runs teacher-evaluated alignment:
   1) evaluate_student.py (uses the Ollama teacher)
   2) build_alignment_pairs.py (requires teacher verdicts)
   3) train_alignment_dpo.py (DPO/ORPO-style alignment)
+  4) evaluate_student.py on the aligned adapter (writes to dedicated outputs)
 
 Any extra args (after the known options) are forwarded to train_alignment_dpo.py.
 EOF
@@ -51,19 +52,22 @@ while [[ $# -gt 0 ]]; do
 done
 
 default_from_config() {
-  python3 - <<'PY' "$CONFIG_PATH" "$1"
+  python3 - <<'PY' "$CONFIG_PATH" "$1" "$2"
 import json, sys
 from pathlib import Path
 cfg = json.loads(Path(sys.argv[1]).read_text())
-section = cfg.get("alignment", {})
-print(section.get(sys.argv[2], ""))
+section = cfg.get(sys.argv[2], {})
+print(section.get(sys.argv[3], ""))
 PY
 }
 
-ADAPTER_DEFAULT="$(default_from_config "adapter")"
-EVAL_RESULTS_DEFAULT="$(default_from_config "eval_results")"
-EVAL_SUMMARY_DEFAULT="$(default_from_config "eval_summary")"
-PAIRS_OUT_DEFAULT="$(default_from_config "pairs_out")"
+ADAPTER_DEFAULT="$(default_from_config "alignment" "adapter")"
+EVAL_RESULTS_DEFAULT="$(default_from_config "alignment" "eval_results")"
+EVAL_SUMMARY_DEFAULT="$(default_from_config "alignment" "eval_summary")"
+PAIRS_OUT_DEFAULT="$(default_from_config "alignment" "pairs_out")"
+ALIGNED_EVAL_RESULTS_DEFAULT="$(default_from_config "alignment" "aligned_eval_results")"
+ALIGNED_EVAL_SUMMARY_DEFAULT="$(default_from_config "alignment" "aligned_eval_summary")"
+ALIGN_OUTPUT_DIR_DEFAULT="$(default_from_config "alignment" "output_dir")"
 
 if [[ -z "${EVAL_RESULTS_DEFAULT}" ]]; then
   EVAL_RESULTS_DEFAULT="outputs/student_runs/eval/evaluation_results.jsonl"
@@ -71,20 +75,35 @@ fi
 if [[ -z "${EVAL_SUMMARY_DEFAULT}" ]]; then
   EVAL_SUMMARY_DEFAULT="$(dirname "${EVAL_RESULTS_DEFAULT}")/evaluation_summary.json"
 fi
+if [[ -z "${ALIGNED_EVAL_RESULTS_DEFAULT}" || -z "${ALIGNED_EVAL_SUMMARY_DEFAULT}" ]]; then
+  echo "Aligned eval outputs must be set in config (alignment.aligned_eval_results / alignment.aligned_eval_summary)."
+  exit 1
+fi
+if [[ -z "${ALIGN_OUTPUT_DIR_DEFAULT}" ]]; then
+  echo "alignment.output_dir must be set in config."
+  exit 1
+fi
 
 ADAPTER="${ADAPTER_OVERRIDE:-$ADAPTER_DEFAULT}"
+ALIGNED_ADAPTER="${ALIGN_OUTPUT_DIR_DEFAULT%/}/checkpoint-final"
 
 echo "Using UV_CACHE_DIR=${UV_CACHE_DIR}"
 echo "Installing / syncing dependencies with uv..."
 uv sync
 
-echo "Running teacher evaluation (required for alignment pairs)..."
-PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
-  --config "${CONFIG_PATH}" \
-  --adapter "${ADAPTER}" \
-  --eval-results "${EVAL_RESULTS_DEFAULT}" \
-  --eval-summary "${EVAL_SUMMARY_DEFAULT}" \
-  "${TEACHER_ARG[@]}"
+if [[ -f "${EVAL_RESULTS_DEFAULT}" && -f "${EVAL_SUMMARY_DEFAULT}" ]]; then
+  echo "Skipping evaluation; outputs already exist:"
+  echo "  ${EVAL_RESULTS_DEFAULT}"
+  echo "  ${EVAL_SUMMARY_DEFAULT}"
+else
+  echo "Running teacher evaluation (required for alignment pairs)..."
+  PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
+    --config "${CONFIG_PATH}" \
+    --adapter "${ADAPTER}" \
+    --eval-results "${EVAL_RESULTS_DEFAULT}" \
+    --eval-summary "${EVAL_SUMMARY_DEFAULT}" \
+    "${TEACHER_ARG[@]}"
+fi
 
 echo "Building preference pairs..."
 PYTHONUNBUFFERED=1 uv run python -u scripts/build_alignment_pairs.py --config "${CONFIG_PATH}" \
@@ -96,5 +115,19 @@ PYTHONUNBUFFERED=1 uv run python -u scripts/train_alignment_dpo.py --config "${C
   --pairs "${PAIRS_OUT_DEFAULT}" \
   --adapter "${ADAPTER}" \
   "${DPO_ARGS[@]}"
+
+if [[ -f "${ALIGNED_EVAL_RESULTS_DEFAULT}" && -f "${ALIGNED_EVAL_SUMMARY_DEFAULT}" ]]; then
+  echo "Skipping post-alignment evaluation; outputs already exist:"
+  echo "  ${ALIGNED_EVAL_RESULTS_DEFAULT}"
+  echo "  ${ALIGNED_EVAL_SUMMARY_DEFAULT}"
+else
+  echo "Running post-alignment evaluation on aligned adapter..."
+  PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
+    --config "${CONFIG_PATH}" \
+    --adapter "${ALIGNED_ADAPTER}" \
+    --eval-results "${ALIGNED_EVAL_RESULTS_DEFAULT}" \
+    --eval-summary "${ALIGNED_EVAL_SUMMARY_DEFAULT}" \
+    "${TEACHER_ARG[@]}"
+fi
 
 echo "Alignment complete."

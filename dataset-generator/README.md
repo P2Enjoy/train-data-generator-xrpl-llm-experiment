@@ -174,9 +174,25 @@ Key fields:
 - `teacher_accept_rate`: % outputs the teacher judged as semantically correct
 - `semantic_pass_rate`: % outputs that are both schema-valid **and** teacher-accepted (the best “did it work?” number)
 
+Teacher calls are retried on parse errors according to `evaluation.teacher_retries` and `evaluation.teacher_retry_wait` in `config/defaults.json` (`-1` = retry indefinitely to keep progressing up to `--max-samples`).
+
 ### 3) DPO alignment metrics
 
-During DPO training (`scripts/train_alignment_dpo.py`), TRL prints step logs to stdout (loss/reward signals vary by TRL version/config). The *real* way to evaluate DPO improvements is to:
+During DPO training (`scripts/train_alignment_dpo.py`), TRL logs step metrics like:
+```json
+{"loss": 0.0, "grad_norm": 0.00011142194125568494, "learning_rate": 4.425252525252526e-06, "rewards/chosen": 12.19339656829834, "rewards/rejected": -2.8378841876983643, "rewards/accuracies": 1.0, "rewards/margins": 15.031280517578125, "logps/chosen": -153.79283142089844, "logps/rejected": -45.93531036376953, "logits/chosen": -2.3316988945007324, "logits/rejected": -2.4716598987579346, "epoch": 206}
+```
+
+- `loss`: DPO objective (log-sigmoid of the reward gap); trends toward 0 when the model already prefers the teacher pick by a wide margin.
+- `grad_norm` / `learning_rate`: sanity checks for stability and schedule.
+- `rewards/chosen` and `rewards/rejected`: DPO “rewards” = beta × (policy log p − reference log p) for each completion; higher `chosen` and lower (often negative) `rejected` is good.
+- `rewards/accuracies`: fraction of pairs where `rewards/chosen` > `rewards/rejected` (want → 1).
+- `rewards/margins`: average reward gap (`chosen − rejected`); larger positive margins mean clearer preferences and usually faster convergence.
+- `logps/*`: total log-likelihood of the chosen/rejected completions under the current policy (without the reference adapter); should get less negative as the policy fits the data.
+- `logits/*`: mean raw logits gathered for the chosen/rejected tokens; mainly a numerical sanity signal (watch for inf/NaN).
+- `epoch`: fractional pass through the pairs dataset.
+
+If you see `loss` saturating at ~0 with `rewards/accuracies` near 1.0, the model is confidently preferring the teacher picks; if `loss` stalls high or `rewards/margins` stay near 0, the model is not separating chosen vs rejected. The *real* way to judge alignment, though, is to:
 
 1) Re-run teacher evaluation on the aligned adapter
 2) Compare `teacher_accept_rate` and `semantic_pass_rate` against the SFT adapter
@@ -228,6 +244,8 @@ Runs evaluation (`scripts/evaluate_student.py`) and then builds a Markdown+plots
 ```bash
 ./runEvals.sh --adapter outputs/student_runs/gemma3-270m/checkpoint-final --teacher-model gpt-oss:120b
 ```
+
+If an aligned checkpoint exists at `alignment.output_dir/checkpoint-final` (defaults to `outputs/student_runs/gemma3-270m-dpo/checkpoint-final`), `runEvals.sh` will also run a second evaluation for it and emit an `alignment_report.md` alongside the standard student report in the reporting directory (defaults to `outputs/reports/gemma-3-270m-it`).
 
 ### `runAlignment.sh` (teacher-required)
 
@@ -345,8 +363,9 @@ Key flags:
 - `--dataset`: dataset JSONL (defaults to `outputs/d_03_dataset.jsonl`)
 - `--teacher-model`: Ollama model id (required for DPO alignment inputs)
 - `--eval-results`: where to write per-sample JSONL (defaults to `alignment.eval_results`; `--out-dir` still works)
-- Generation: `--max-new-tokens`, `--temperature`, `--top-p`
-- Sampling: `--max-samples`, `--include-invalid`
+- Generation: `--max-new-tokens`, `--temperature`, `--top-p` (defaults from `evaluation.*` in config)
+- Sampling: `--max-samples` (shuffles with `--sample-seed` first for diversity), `--include-invalid`
+- Teacher robustness: `--teacher-retries` (`-1` = infinite), `--teacher-retry-wait`
 
 ### `scripts/build_alignment_pairs.py` (preference dataset builder)
 
