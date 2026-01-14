@@ -141,6 +141,23 @@ if [[ -z "${EVAL_SUMMARY}" ]]; then
   EVAL_SUMMARY="$(dirname "${EVAL_RESULTS}")/evaluation_summary.json"
 fi
 
+HAS_CHECKPOINT_ARG=0
+for arg in "${EVAL_ARGS[@]}"; do
+  if [[ "$arg" == "--checkpoint-path" ]]; then
+    HAS_CHECKPOINT_ARG=1
+    break
+  fi
+done
+
+if [[ ${HAS_CHECKPOINT_ARG} -eq 0 ]]; then
+  EVAL_CHECKPOINT="$(dirname "${EVAL_RESULTS}")/evaluation_checkpoint.json"
+  EVAL_ARGS+=("--checkpoint-path" "${EVAL_CHECKPOINT}")
+  if [[ -f "${EVAL_CHECKPOINT}" ]]; then
+    echo "Found eval checkpoint at ${EVAL_CHECKPOINT}; resuming."
+    EVAL_ARGS+=("--resume")
+  fi
+fi
+
 TRAIN_DIR="$(cd "$(dirname "$ADAPTER")" && pwd)"
 ALIGNED_ADAPTER="${CONFIG_ALIGNED_ADAPTER:-}"
 ALIGNED_EVAL_RESULTS="${CONFIG_ALIGNED_EVAL_RESULTS:-}"
@@ -193,10 +210,27 @@ if [[ -n "${ALIGNED_ADAPTER}" && -d "${ALIGNED_ADAPTER}" ]]; then
     echo "  ${ALIGNED_EVAL_RESULTS}"
     echo "  ${ALIGNED_EVAL_SUMMARY}"
   else
+    HAS_ALIGNED_CHECKPOINT=0
+    for arg in "${COMMON_ARGS[@]}"; do
+      if [[ "$arg" == "--checkpoint-path" ]]; then
+        HAS_ALIGNED_CHECKPOINT=1
+        break
+      fi
+    done
+    ALIGNED_ARGS=()
+    if [[ ${HAS_ALIGNED_CHECKPOINT} -eq 0 ]]; then
+      ALIGNED_EVAL_CHECKPOINT="$(dirname "${ALIGNED_EVAL_RESULTS}")/evaluation_checkpoint.json"
+      ALIGNED_ARGS+=("--checkpoint-path" "${ALIGNED_EVAL_CHECKPOINT}")
+      if [[ -f "${ALIGNED_EVAL_CHECKPOINT}" ]]; then
+        echo "Found aligned eval checkpoint at ${ALIGNED_EVAL_CHECKPOINT}; resuming."
+        ALIGNED_ARGS+=("--resume")
+      fi
+    fi
     PYTHONUNBUFFERED=1 uv run python -u scripts/evaluate_student.py \
       --adapter "${ALIGNED_ADAPTER}" \
       --eval-results "${ALIGNED_EVAL_RESULTS}" \
       --eval-summary "${ALIGNED_EVAL_SUMMARY}" \
+      "${ALIGNED_ARGS[@]}" \
       "${COMMON_ARGS[@]}"
   fi
 

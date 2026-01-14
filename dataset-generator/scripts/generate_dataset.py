@@ -16,7 +16,7 @@ from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
 
 from lib.config import DEFAULT_CONFIG_PATH, load_section
-from lib.io import canonical_json, load_jsonl, write_jsonl
+from lib.io import canonical_json, load_jsonl
 
 DEFAULT_OPERATORS = ["equals", "not_equals", "like", "in"]
 OP_PHRASES = {
@@ -116,7 +116,28 @@ def parse_args() -> argparse.Namespace:
         default=int(defaults.get("seed", 11)),
         help="Seed for deterministic generation.",
     )
-    return parser.parse_args(remaining)
+    parser.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=Path(defaults["checkpoint_path"]) if defaults.get("checkpoint_path") else None,
+        help="Where to store progress for resuming generation. Disabled if not set.",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=int(defaults.get("checkpoint_every", 1)),
+        help="Save checkpoint every N schemas (requires --checkpoint-path).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume dataset generation from an existing checkpoint.",
+    )
+    args = parser.parse_args(remaining)
+    args.checkpoint_path_default = Path(defaults["checkpoint_path"]) if defaults.get("checkpoint_path") else None
+    args.dataset_out_default = Path(defaults["dataset_out"])
+    return args
 
 
 def extract_operator_metadata(entry: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
@@ -554,46 +575,163 @@ def build_refusal_records(
     return records
 
 
+def serialize_rng_state(state: Tuple[Any, ...]) -> List[Any]:
+    version, inner, gaussian = state
+    return [version, list(inner), gaussian]
+
+
+def deserialize_rng_state(state: List[Any]) -> Tuple[Any, ...]:
+    version, inner, gaussian = state
+    return (version, tuple(inner), gaussian)
+
+
+def load_checkpoint(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"Failed to read checkpoint at {path}: {exc}")
+
+
+def save_checkpoint(
+    path: Path,
+    next_schema_index: int,
+    rng: random.Random,
+    current_date: date,
+    dataset_out: Path,
+    schemas_path: Path,
+    rows_written: int,
+    total_schemas: int,
+) -> None:
+    payload = {
+        "next_schema_index": next_schema_index,
+        "rng_state": serialize_rng_state(rng.getstate()),
+        "current_date": current_date.isoformat(),
+        "dataset_out": str(dataset_out),
+        "schemas_path": str(schemas_path),
+        "rows_written": rows_written,
+        "total_schemas": total_schemas,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
+    checkpoint_path = args.checkpoint_path
+    if checkpoint_path is None:
+        checkpoint_path = args.out.parent / "dataset_generation_checkpoint.json"
+    elif args.checkpoint_path_default and checkpoint_path == args.checkpoint_path_default and args.out != args.dataset_out_default:
+        checkpoint_path = args.out.parent / "dataset_generation_checkpoint.json"
+    args.checkpoint_path = checkpoint_path
+    if args.checkpoint_every < 1:
+        raise SystemExit("--checkpoint-every must be >= 1 when checkpointing is enabled.")
+
     rng = random.Random(args.seed)
     schemas = load_jsonl(args.schemas)
     total = len(schemas)
     print(f"[info] Building dataset from {total} schemas in {args.schemas}")
 
-    dataset_rows: List[Dict[str, Any]] = []
     current_date = date.today()
-    for idx, entry in enumerate(schemas, start=1):
-        print(f"[info] [{idx}/{total}] {entry.get('schema_id')}")
-        if not entry.get("fields"):
-            print(f"[warn] skipping {entry.get('schema_id')} because no fields were provided")
-            continue
-        operators, canonical_map = extract_operator_metadata(entry)
-        validator = Draft7Validator(entry["schema"])
-        positives = build_positive_records(
-            entry,
-            validator,
-            operators,
-            canonical_map,
-            rng,
-            current_date,
-            args.positives_per_schema,
-        )
-        negative_target = int(math.ceil(len(positives) * args.negative_ratio))
-        negatives = build_negative_records(entry, validator, operators, rng, positives, negative_target)
-        refusals = build_refusal_records(entry, operators, canonical_map, rng, current_date, args.refusals_per_schema)
-        print(
-            f"[info] ✓ {entry.get('schema_id')}: {len(positives)} positives, {len(negatives)} negatives, {len(refusals)} refusals (target ratio {args.negative_ratio})"
-        )
+    start_index = 1
+    rows_written = 0
 
-        for record in positives:
-            record.pop("_ast", None)
-        dataset_rows.extend(positives)
-        dataset_rows.extend(negatives)
-        dataset_rows.extend(refusals)
+    if args.resume:
+        if not args.checkpoint_path or not args.checkpoint_path.exists():
+            raise SystemExit(f"Checkpoint file not found: {args.checkpoint_path}")
+        checkpoint = load_checkpoint(args.checkpoint_path)
+        start_index = int(checkpoint.get("next_schema_index", 1))
+        rows_written = int(checkpoint.get("rows_written", 0))
+        checkpoint_date = checkpoint.get("current_date")
+        if checkpoint_date:
+            current_date = date.fromisoformat(checkpoint_date)
+        rng_state = checkpoint.get("rng_state")
+        if rng_state:
+            rng.setstate(deserialize_rng_state(rng_state))
+        checkpoint_schemas = checkpoint.get("schemas_path")
+        if checkpoint_schemas and Path(checkpoint_schemas) != args.schemas:
+            print(f"[warn] Checkpoint was created with schemas at {checkpoint_schemas}; current --schemas is {args.schemas}")
+        checkpoint_out = checkpoint.get("dataset_out")
+        if checkpoint_out and Path(checkpoint_out) != args.out:
+            print(f"[warn] Checkpoint expects output at {checkpoint_out}; current --out is {args.out}")
+        if not args.out.exists():
+            raise SystemExit(f"Expected dataset output at {args.out} when resuming, but it does not exist.")
+        print(f"[resume] Resuming from schema {start_index}/{total} (rows written so far: {rows_written})")
+    else:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.unlink(missing_ok=True)
+        if args.checkpoint_path:
+            args.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            if args.checkpoint_path.exists():
+                print(f"[info] removing existing checkpoint at {args.checkpoint_path} (pass --resume to continue it).")
+            args.checkpoint_path.unlink(missing_ok=True)
 
-    write_jsonl(args.out, dataset_rows)
-    print(f"Wrote {len(dataset_rows)} rows to {args.out}")
+    if start_index > total:
+        print(f"[info] Checkpoint covers all {total} schemas; nothing to do.")
+        if args.checkpoint_path:
+            args.checkpoint_path.unlink(missing_ok=True)
+        print(f"Wrote {rows_written} rows to {args.out}")
+        return
+
+    with args.out.open("a", encoding="utf-8") as handle:
+        for idx, entry in enumerate(schemas, start=1):
+            checkpoint_due = bool(args.checkpoint_path and (idx % args.checkpoint_every == 0 or idx == total))
+            if idx < start_index:
+                continue
+            print(f"[info] [{idx}/{total}] {entry.get('schema_id')}")
+            if not entry.get("fields"):
+                print(f"[warn] skipping {entry.get('schema_id')} because no fields were provided")
+                if checkpoint_due:
+                    save_checkpoint(
+                        args.checkpoint_path,
+                        next_schema_index=idx + 1,
+                        rng=rng,
+                        current_date=current_date,
+                        dataset_out=args.out,
+                        schemas_path=args.schemas,
+                        rows_written=rows_written,
+                        total_schemas=total,
+                    )
+                continue
+            operators, canonical_map = extract_operator_metadata(entry)
+            validator = Draft7Validator(entry["schema"])
+            positives = build_positive_records(
+                entry,
+                validator,
+                operators,
+                canonical_map,
+                rng,
+                current_date,
+                args.positives_per_schema,
+            )
+            negative_target = int(math.ceil(len(positives) * args.negative_ratio))
+            negatives = build_negative_records(entry, validator, operators, rng, positives, negative_target)
+            refusals = build_refusal_records(entry, operators, canonical_map, rng, current_date, args.refusals_per_schema)
+            print(
+                f"[info] ✓ {entry.get('schema_id')}: {len(positives)} positives, {len(negatives)} negatives, {len(refusals)} refusals (target ratio {args.negative_ratio})"
+            )
+
+            for record in positives:
+                record.pop("_ast", None)
+            all_records = positives + negatives + refusals
+            for record in all_records:
+                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+            handle.flush()
+            rows_written += len(all_records)
+            if checkpoint_due:
+                save_checkpoint(
+                    args.checkpoint_path,
+                    next_schema_index=idx + 1,
+                    rng=rng,
+                    current_date=current_date,
+                    dataset_out=args.out,
+                    schemas_path=args.schemas,
+                    rows_written=rows_written,
+                    total_schemas=total,
+                )
+
+    if args.checkpoint_path:
+        args.checkpoint_path.unlink(missing_ok=True)
+    print(f"Wrote {rows_written} rows to {args.out}")
 
 
 if __name__ == "__main__":

@@ -75,11 +75,12 @@ emit("schema_specs_out", "outputs/d_01_domain_specs.jsonl")
 emit("final_schemas_out", "outputs/d_02_final_schemas.jsonl")
 emit("dataset_out", "outputs/d_03_dataset.jsonl")
 emit("training_corpus_out", "outputs/d_04_training_corpus.jsonl")
+emit("dataset_checkpoint", "outputs/checkpoints/dataset_generation.json")
 PY
 )
 
 eval "${env_exports}"
-log "Resolved dataset outputs: specs=${schema_specs_out}, schemas=${final_schemas_out}, dataset=${dataset_out}, corpus=${training_corpus_out}"
+log "Resolved dataset outputs: specs=${schema_specs_out}, schemas=${final_schemas_out}, dataset=${dataset_out}, corpus=${training_corpus_out}, checkpoint=${dataset_checkpoint}"
 
 run_step() {
   local name="$1"
@@ -125,11 +126,19 @@ run_step \
   scripts/build_schemas.py \
     --config "${CONFIG_PATH}"
 
+DATASET_RESUME_ARGS=()
+DATASET_SKIP_COND="[ -s \"${dataset_out}\" ] && { [ -z \"${dataset_checkpoint}\" ] || [ ! -f \"${dataset_checkpoint}\" ]; }"
+if [[ -n "${dataset_checkpoint}" && -f "${dataset_checkpoint}" ]]; then
+  log "Dataset checkpoint found at ${dataset_checkpoint}; resuming generation."
+  DATASET_RESUME_ARGS+=(--resume)
+fi
+
 run_step \
   "dataset generation" \
-  "[ -s \"${dataset_out}\" ]" \
+  "${DATASET_SKIP_COND}" \
   scripts/generate_dataset.py \
-    --config "${CONFIG_PATH}"
+    --config "${CONFIG_PATH}" \
+    "${DATASET_RESUME_ARGS[@]}"
 
 run_step \
   "training corpus export" \

@@ -27,6 +27,9 @@ dependencies = [
     "xformers",
 ]
 
+[tool.uv]
+index-strategy = "unsafe-best-match"
+
 [tool.uv.sources]
 flash-attn = { path = "../../mlwheel/flash_attn-2.7.4-cp312-cp312-linux_aarch64.whl" }
 xformers = { path = "../../mllib/xformers/dist/xformers-0.0.34+41531cee.d20251229-cp39-abi3-linux_aarch64.whl" }

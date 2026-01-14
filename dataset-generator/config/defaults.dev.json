@@ -10,6 +10,8 @@
     "final_schemas_out": "outputs/dev/d_02_final_schemas.jsonl",
     "dataset_out": "outputs/dev/d_03_dataset.jsonl",
     "training_corpus_out": "outputs/dev/d_04_training_corpus.jsonl",
+    "checkpoint_path": "outputs/dev/checkpoints/dataset_generation.json",
+    "checkpoint_every": 1,
     "positives_per_schema": 2,
     "negative_ratio": 0.5,
     "refusals_per_schema": 1,
@@ -19,6 +21,8 @@
   "evaluation": {
     "eval_results": "outputs/dev/student_runs/eval/evaluation_results.jsonl",
     "eval_summary": "outputs/dev/student_runs/eval/evaluation_summary.json",
+    "checkpoint_path": "outputs/dev/student_runs/eval/evaluation_checkpoint.json",
+    "checkpoint_every": 5,
     "max_samples": 50,
     "max_new_tokens": 128,
     "temperature": 0.2,
@@ -75,6 +79,8 @@
     "warmup_steps": 5,
     "max_steps": 50,
     "logging_steps": 5,
+    "save_steps": 10,
+    "save_total_limit": 1,
     "beta": 0.1,
     "load_in_4bit": true,
     "bf16": true

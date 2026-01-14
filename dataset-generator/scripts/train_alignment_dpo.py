@@ -37,6 +37,9 @@ def parse_args() -> argparse.Namespace:
     )
     config_args, remaining = config_parser.parse_known_args()
     defaults = load_section("alignment", config_args.config)
+    logging_default = int(defaults.get("logging_steps", 10))
+    save_steps_default = int(defaults.get("save_steps", logging_default * 10))
+    save_total_limit_default = int(defaults.get("save_total_limit", 3))
 
     required_keys = ("pairs_out", "adapter", "output_dir")
     missing = [key for key in required_keys if not defaults.get(key)]
@@ -74,7 +77,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=float(defaults.get("learning_rate", 5e-6)), help="Learning rate for LoRA params.")
     parser.add_argument("--warmup-steps", type=int, default=int(defaults.get("warmup_steps", 50)), help="Warmup steps.")
     parser.add_argument("--max-steps", type=int, default=int(defaults.get("max_steps", 500)), help="Total training steps.")
-    parser.add_argument("--logging-steps", type=int, default=int(defaults.get("logging_steps", 10)), help="Log frequency.")
+    parser.add_argument("--logging-steps", type=int, default=logging_default, help="Log frequency.")
+    parser.add_argument(
+        "--save-steps",
+        type=int,
+        default=save_steps_default,
+        help="Checkpoint save frequency (steps).",
+    )
+    parser.add_argument(
+        "--save-total-limit",
+        type=int,
+        default=save_total_limit_default,
+        help="Maximum checkpoints to keep (older ones are removed).",
+    )
     parser.add_argument("--beta", type=float, default=float(defaults.get("beta", 0.1)), help="DPO beta.")
     parser.add_argument(
         "--load-in-4bit",
@@ -87,6 +102,12 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=bool(defaults.get("bf16", True)),
         help="Use bfloat16 if available.",
+    )
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=Path,
+        default=None,
+        help="Resume from a previous DPO checkpoint directory.",
     )
     args = parser.parse_args(remaining)
     args.config = config_args.config
@@ -160,6 +181,8 @@ def main() -> None:
 
     dataset = load_pairs(args.pairs, tokenizer, args.max_seq_length)
     print(f"[dpo] pairs={len(dataset)} beta={args.beta} 4bit={args.load_in_4bit}")
+    if args.resume_from_checkpoint:
+        print(f"[dpo] resuming from checkpoint: {args.resume_from_checkpoint}")
 
     training_args = DPOConfig(
         beta=args.beta,
@@ -171,7 +194,9 @@ def main() -> None:
         warmup_steps=args.warmup_steps,
         max_steps=args.max_steps,
         logging_steps=args.logging_steps,
-        save_steps=args.logging_steps * 10,
+        save_strategy="steps",
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
         output_dir=str(args.output_dir),
         report_to="none",
         bf16=args.bf16 and torch.cuda.is_available(),
@@ -187,7 +212,7 @@ def main() -> None:
         train_dataset=dataset,
         processing_class=tokenizer,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=str(args.resume_from_checkpoint) if args.resume_from_checkpoint else None)
     final_dir = args.output_dir / "checkpoint-final"
     final_dir.mkdir(parents=True, exist_ok=True)
     trainer.model.save_pretrained(final_dir)

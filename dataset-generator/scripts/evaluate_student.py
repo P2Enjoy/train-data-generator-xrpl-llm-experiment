@@ -19,7 +19,7 @@ from unsloth import FastModel
 from unsloth.chat_templates import get_chat_template
 
 from lib.config import DEFAULT_CONFIG_PATH, load_section
-from lib.io import canonical_json, write_jsonl
+from lib.io import canonical_json, load_jsonl
 from lib.llm import run_ollama
 from lib.parsing import extract_json_object
 from model_config import default_model
@@ -77,6 +77,10 @@ def parse_args() -> argparse.Namespace:
     load_in_4bit_default = bool(training_defaults.get("load_in_4bit", True))
     eval_results_default = evaluation_defaults.get("eval_results") or alignment_defaults.get("eval_results")
     eval_summary_default = evaluation_defaults.get("eval_summary") or alignment_defaults.get("eval_summary")
+    eval_checkpoint_path_default = evaluation_defaults.get("checkpoint_path")
+    if not eval_checkpoint_path_default and eval_results_default:
+        eval_checkpoint_path_default = str(Path(eval_results_default).parent / "evaluation_checkpoint.json")
+    eval_checkpoint_every_default = int(evaluation_defaults.get("checkpoint_every", 25) or 25)
     eval_max_samples_default = int(evaluation_defaults.get("max_samples", 200) or 200)
     eval_max_new_tokens_default = int(evaluation_defaults.get("max_new_tokens", 256) or 256)
     eval_temperature_default = float(evaluation_defaults.get("temperature", 0.2) or 0.2)
@@ -149,6 +153,24 @@ def parse_args() -> argparse.Namespace:
         help="Where to write evaluation metrics JSON (default: alignment.eval_summary or alongside --eval-results).",
     )
     parser.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=Path(eval_checkpoint_path_default) if eval_checkpoint_path_default else None,
+        help="Where to store progress for resuming evaluation. Disabled if not set.",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=eval_checkpoint_every_default,
+        help="Save checkpoint every N samples (requires --checkpoint-path).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume evaluation from an existing checkpoint.",
+    )
+    parser.add_argument(
         "--teacher-retries",
         type=int,
         default=teacher_retries_default,
@@ -180,8 +202,9 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args(remaining)
     args.config = config_args.config
-    args.eval_results_default = eval_results_default
-    args.eval_summary_default = eval_summary_default
+    args.eval_results_default = eval_results_default_path
+    args.eval_summary_default = eval_summary_default_path
+    args.eval_checkpoint_default = Path(eval_checkpoint_path_default) if eval_checkpoint_path_default else None
     return args
 
 
@@ -447,8 +470,46 @@ def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def read_checkpoint(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"Failed to read checkpoint at {path}: {exc}")
+
+
+def write_checkpoint(
+    path: Path,
+    next_sample_index: int,
+    eval_results: Path,
+    eval_summary: Path,
+    dataset_path: Path,
+    total_samples: int,
+    results_written: int,
+    adapter: Path,
+    teacher_model: str,
+    sample_seed: int,
+    include_invalid: bool,
+) -> None:
+    payload = {
+        "next_sample_index": next_sample_index,
+        "results_written": results_written,
+        "eval_results": str(eval_results),
+        "eval_summary": str(eval_summary),
+        "dataset": str(dataset_path),
+        "total_samples": total_samples,
+        "adapter": str(adapter),
+        "teacher_model": teacher_model,
+        "sample_seed": sample_seed,
+        "include_invalid": include_invalid,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
+    if args.checkpoint_every < 1:
+        raise SystemExit("--checkpoint-every must be >= 1 when checkpointing is enabled.")
     if not args.teacher_model:
         raise SystemExit("Teacher model is required; set LLM_MODEL or .llmrc to an ollama model id.")
 
@@ -464,6 +525,52 @@ def main() -> None:
         ):
             eval_summary_path = args.eval_results.parent / "evaluation_summary.json"
     out_dir = eval_results_path.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    derived_checkpoint = eval_results_path.parent / "evaluation_checkpoint.json"
+    checkpoint_path = args.checkpoint_path
+    if checkpoint_path is None:
+        checkpoint_path = derived_checkpoint
+    elif args.eval_checkpoint_default and checkpoint_path == args.eval_checkpoint_default and args.eval_results != args.eval_results_default:
+        checkpoint_path = derived_checkpoint
+    args.checkpoint_path = checkpoint_path
+
+    start_index = 1
+    results_written = 0
+    checkpoint: Dict[str, Any] = {}
+
+    if args.resume:
+        if not args.checkpoint_path or not args.checkpoint_path.exists():
+            raise SystemExit(f"Checkpoint file not found: {args.checkpoint_path}")
+        checkpoint = read_checkpoint(args.checkpoint_path)
+        start_index = int(checkpoint.get("next_sample_index", 1))
+        results_written = int(checkpoint.get("results_written", 0))
+        checkpoint_results = checkpoint.get("eval_results")
+        if checkpoint_results and Path(checkpoint_results) != eval_results_path:
+            print(f"[warn] Checkpoint expects eval_results at {checkpoint_results}; using {eval_results_path}")
+        checkpoint_dataset = checkpoint.get("dataset")
+        if checkpoint_dataset and Path(checkpoint_dataset) != args.dataset:
+            print(f"[warn] Checkpoint was created with dataset {checkpoint_dataset}; current --dataset is {args.dataset}")
+        if not eval_results_path.exists():
+            raise SystemExit(f"Expected eval results at {eval_results_path} when resuming, but the file is missing.")
+        existing_lines = sum(1 for line in eval_results_path.open("r", encoding="utf-8") if line.strip())
+        if existing_lines != results_written:
+            print(
+                f"[warn] Checkpoint recorded {results_written} results, "
+                f"but found {existing_lines} lines in {eval_results_path}; using file count."
+            )
+            results_written = existing_lines
+        print(f"[resume] Continuing from sample {start_index} with {results_written} results already written.")
+    else:
+        if eval_results_path.exists():
+            print(f"[info] overwriting existing results at {eval_results_path} (pass --resume to continue).")
+        eval_results_path.unlink(missing_ok=True)
+        eval_summary_path.unlink(missing_ok=True)
+        if args.checkpoint_path:
+            args.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            if args.checkpoint_path.exists():
+                print(f"[info] removing existing checkpoint at {args.checkpoint_path} (pass --resume to continue it).")
+            args.checkpoint_path.unlink(missing_ok=True)
 
     # Explicit schema avoids Arrow inferring null-only columns (e.g., validation_error)
     features = Features(
@@ -485,6 +592,10 @@ def main() -> None:
         dataset = dataset.filter(lambda x: bool(x.get("is_valid", True)))
     if args.max_samples and len(dataset) > args.max_samples:
         dataset = dataset.shuffle(seed=args.sample_seed).select(range(args.max_samples))
+    total_samples = len(dataset)
+    checkpoint_total = checkpoint.get("total_samples") if checkpoint else None
+    if checkpoint_total and int(checkpoint_total) != total_samples:
+        print(f"[warn] Checkpoint expected {checkpoint_total} samples; current dataset has {total_samples}.")
     if not args.teacher_model:
         print("[eval] teacher disabled (no --teacher-model provided and no .llmrc found)")
     print(
@@ -492,31 +603,59 @@ def main() -> None:
         f"teacher={args.teacher_model or 'none'} log_every={args.log_every}"
     )
 
+    if start_index > total_samples:
+        print(f"[eval] Checkpoint covers all {total_samples} samples; rebuilding summary only.")
+        if args.checkpoint_path:
+            args.checkpoint_path.unlink(missing_ok=True)
+        all_results = load_jsonl(eval_results_path) if eval_results_path.exists() else []
+        summary = summarize(all_results)
+        eval_summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(json.dumps(summary, indent=2))
+        return
+
     model, tokenizer = load_student(args.base_model, args.adapter, args.max_seq_length, args.load_in_4bit)
-    results: List[Dict[str, Any]] = []
+    with eval_results_path.open("a", encoding="utf-8") as handle:
+        for idx, sample in enumerate(dataset, start=1):
+            if idx < start_index:
+                continue
+            schema = json.loads(sample["schema_json"])
+            validator = Draft7Validator(schema)
+            result = evaluate_sample(
+                sample,
+                model,
+                tokenizer,
+                validator,
+                args.temperature,
+                args.top_p,
+                args.max_new_tokens,
+                teacher_model=args.teacher_model,
+                teacher_retries=args.teacher_retries,
+                teacher_retry_wait=args.teacher_retry_wait,
+            )
+            handle.write(json.dumps(result, ensure_ascii=True) + "\n")
+            handle.flush()
+            results_written += 1
+            if args.log_every and idx % args.log_every == 0:
+                print(f"[eval] processed {idx}/{len(dataset)}")
+            if args.checkpoint_path and (idx % args.checkpoint_every == 0 or idx == total_samples):
+                write_checkpoint(
+                    args.checkpoint_path,
+                    next_sample_index=idx + 1,
+                    eval_results=eval_results_path,
+                    eval_summary=eval_summary_path,
+                    dataset_path=args.dataset,
+                    total_samples=total_samples,
+                    results_written=results_written,
+                    adapter=args.adapter,
+                    teacher_model=args.teacher_model,
+                    sample_seed=args.sample_seed,
+                    include_invalid=args.include_invalid,
+                )
 
-    for idx, sample in enumerate(dataset, start=1):
-        schema = json.loads(sample["schema_json"])
-        validator = Draft7Validator(schema)
-        result = evaluate_sample(
-            sample,
-            model,
-            tokenizer,
-            validator,
-            args.temperature,
-            args.top_p,
-            args.max_new_tokens,
-            teacher_model=args.teacher_model,
-            teacher_retries=args.teacher_retries,
-            teacher_retry_wait=args.teacher_retry_wait,
-        )
-        results.append(result)
-        if args.log_every and idx % args.log_every == 0:
-            print(f"[eval] processed {idx}/{len(dataset)}")
-
-    summary = summarize(results)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(eval_results_path, results)
+            if args.checkpoint_path:
+                args.checkpoint_path.unlink(missing_ok=True)
+    all_results = load_jsonl(eval_results_path) if eval_results_path.exists() else []
+    summary = summarize(all_results)
     eval_summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 

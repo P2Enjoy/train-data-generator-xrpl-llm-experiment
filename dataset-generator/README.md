@@ -216,6 +216,7 @@ Generates `outputs/d_01` → `outputs/d_05` (and `outputs/pretty/*`).
 Flags:
 - `--config`: path to config JSON
 - `--model`: Ollama model id to use for schema/query generation
+Resumes automatically if a dataset checkpoint file from a prior run is present.
 
 ### Fast dev config (tiny end-to-end runs)
 
@@ -246,6 +247,8 @@ Runs evaluation (`scripts/evaluate_student.py`) and then builds a Markdown+plots
 ```
 
 If an aligned checkpoint exists at `alignment.output_dir/checkpoint-final` (defaults to `outputs/student_runs/gemma3-270m-dpo/checkpoint-final`), `runEvals.sh` will also run a second evaluation for it and emit an `alignment_report.md` alongside the standard student report in the reporting directory (defaults to `outputs/reports/gemma-3-270m-it`).
+
+Resumes evaluation automatically when a checkpoint JSON sits next to the evaluation results path.
 
 ### `runAlignment.sh` (teacher-required)
 
@@ -316,6 +319,7 @@ Key flags:
 - `--negative-ratio`: how many invalid negatives per positive
 - `--refusals-per-schema`: how many refusal samples to synthesize per schema
 - `--seed`: controls deterministic sampling/mutations
+- Checkpointing: `--checkpoint-path` + `--checkpoint-every` for periodic saves; `--resume` continues from an on-disk checkpoint (enabled by default via config and the runner).
 
 #### `scripts/build_training_corpus.py`
 
@@ -366,6 +370,7 @@ Key flags:
 - Generation: `--max-new-tokens`, `--temperature`, `--top-p` (defaults from `evaluation.*` in config)
 - Sampling: `--max-samples` (shuffles with `--sample-seed` first for diversity), `--include-invalid`
 - Teacher robustness: `--teacher-retries` (`-1` = infinite), `--teacher-retry-wait`
+- Checkpointing: `--checkpoint-path` (defaults next to `--eval-results`), `--checkpoint-every`, `--resume` for long evals; the runner auto-resumes when it finds a checkpoint file.
 
 ### `scripts/build_alignment_pairs.py` (preference dataset builder)
 
@@ -389,6 +394,7 @@ Key flags:
 - `--adapter`: starting checkpoint (`alignment.adapter`)
 - `--output-dir`: where to save aligned adapter (`alignment.output_dir`)
 - Training: `--max-steps`, `--batch-size`, `--grad-accum`, `--learning-rate`, `--warmup-steps`, `--logging-steps`
+- Checkpointing: `--save-steps`, `--save-total-limit`, `--resume-from-checkpoint` (point at a saved checkpoint dir to keep going)
 - DPO: `--beta`
 - Precision/memory: `--load-in-4bit`, `--bf16`, `--max-seq-length`
 
@@ -472,6 +478,7 @@ These settings control supervised fine-tuning where the student learns to reprod
 - `logging_steps` (`10`): how often to log training metrics.
 - `save_steps` (`200`): checkpoint frequency.
 - `save_total_limit` (`3`): number of checkpoints to keep.
+- Dataset + eval scripts also checkpoint mid-run: use `--checkpoint-path`/`--checkpoint-every` and `--resume` (runners auto-detect existing checkpoints).
 
 **Stability**
 - `max_grad_norm` (`1.0`): gradient clipping. This caps rare excursions without usually hurting quality.
@@ -515,6 +522,9 @@ These settings control the post-SFT preference tuning step.
 - `warmup_steps` (`50`)
 - `max_steps` (`500`)
 - `logging_steps` (`10`)
+- `save_steps` (`100`): checkpoint frequency.
+- `save_total_limit` (`3`): number of checkpoints to keep (older ones pruned).
+- Resume a run with `--resume-from-checkpoint <path>` pointing to a saved DPO checkpoint under `alignment.output_dir`.
 
 **DPO-specific**
 - `beta` (`0.1`): strength of the preference objective (higher = more aggressively “follow teacher over rejected”).
