@@ -12,9 +12,10 @@
     "training_corpus_out": "outputs/dev/d_04_training_corpus.jsonl",
     "checkpoint_path": "outputs/dev/checkpoints/dataset_generation.json",
     "checkpoint_every": 1,
-    "positives_per_schema": 2,
-    "negative_ratio": 0.5,
-    "refusals_per_schema": 1,
+    "samples_per_schema": 12,
+    "teacher_model": "gpt-oss:20b",
+    "teacher_retries": 3,
+    "teacher_retry_wait": 1.0,
     "offline_fallback": false,
     "max_retries": -1
   },

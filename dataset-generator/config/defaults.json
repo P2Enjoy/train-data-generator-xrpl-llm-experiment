@@ -1,10 +1,9 @@
 {
   "dataset_generation": {
     "prompts_path": "data/domain_prompts.jsonl",
-    "examples_per_schema": 60,
+    "examples_per_schema": 250,
     "min_operators": 4,
     "max_operators": 7,
-    "max_retries": 10,
     "seed": 11,
     "include_invalid": true,
     "schema_specs_out": "outputs/d_01_domain_specs.jsonl",
@@ -13,9 +12,10 @@
     "training_corpus_out": "outputs/d_04_training_corpus.jsonl",
     "checkpoint_path": "outputs/checkpoints/dataset_generation.json",
     "checkpoint_every": 1,
-    "positives_per_schema": 2500,
-    "negative_ratio": 0.6,
-    "refusals_per_schema": 200
+    "samples_per_schema": 250,
+    "teacher_model": "gpt-oss:120b",
+    "teacher_retries": 3,
+    "teacher_retry_wait": 1.0
   },
   "evaluation": {
     "eval_results": "outputs/student_runs/eval-gemma-3-270m-it/evaluation_results.jsonl",

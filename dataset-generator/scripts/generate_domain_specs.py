@@ -15,10 +15,6 @@ from lib.config import DEFAULT_CONFIG_PATH, load_section
 from lib.io import write_jsonl
 from lib.llm import run_ollama
 from lib.parsing import extract_json_object
-from model_config import default_model
-
-
-OLLAMA_MODEL = default_model()
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,10 +43,12 @@ def parse_args() -> argparse.Namespace:
         help="Where to write JSONL specs.",
     )
     parser.add_argument(
+        "--teacher-model",
         "--model",
+        dest="model",
         type=str,
-        default=OLLAMA_MODEL,
-        help="Ollama model name to call.",
+        default=str(defaults.get("teacher_model") or "gpt-oss:120b"),
+        help="Ollama model name to call (defaults to dataset_generation.teacher_model).",
     )
     parser.add_argument(
         "--seed",

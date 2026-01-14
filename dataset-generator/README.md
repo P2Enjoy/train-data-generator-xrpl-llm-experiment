@@ -6,7 +6,7 @@ This repository is a **complete, teacher-in-the-loop pipeline** to build a small
 - Read a natural language **query** (EN/FR)
 - Output **one JSON object** (an AST) that **validates against the schema** and matches the query intent, or a refusal with a reason + suggestion when the schema cannot satisfy the request
 
-The teacher is a local **Ollama** model (configured via `.llmrc` or `LLM_MODEL`). The student is **Gemma 3 270M** fine-tuned with **Unsloth LoRA**. After SFT, the repo runs a **teacher‑aligned preference tuning step (DPO)** using teacher verdicts.
+The teacher is a local **Ollama** model (set via `--teacher-model`, config, or `LLM_MODEL`). The student is **Gemma 3 270M** fine-tuned with **Unsloth LoRA**. After SFT, the repo runs a **teacher‑aligned preference tuning step (DPO)** using teacher verdicts.
 
 ## What you run (high level)
 
@@ -29,19 +29,10 @@ If you only run one command, use `runAll.sh` (see Quickstart).
 
 ### Teacher model configuration
 
-The teacher model id is resolved in this order:
-
-1) `LLM_MODEL` environment variable  
-2) `.llmrc` file at repo root (one line: model id)  
-3) fallback: `gpt-oss:120b`
-
-Example:
-
-```bash
-echo "gpt-oss:120b" > .llmrc
-# or:
-export LLM_MODEL="gpt-oss:120b"
-```
+The teacher model id comes from (in practice):
+- CLI: `--teacher-model`
+- Config: `dataset_generation.teacher_model` (defaults to `gpt-oss:120b`)
+- Environment: `LLM_MODEL` (used as a fallback/default for scripts that accept `--teacher-model`)
 
 ---
 
@@ -57,7 +48,7 @@ uv sync
 
 Notes:
 - `--with-alignment` requires the **Ollama teacher** to be available (alignment is built from teacher verdicts).
-- If you want to override the teacher model for dataset generation, use `./runAll.sh --model <ollama_id> ...`.
+- `--teacher-model` sets the teacher used for domain specs, dataset generation, evals, and alignment (required for those stages).
 - Defaults come from `config/defaults.json` unless overridden with CLI flags.
 - `runAll.sh` auto-resumes SFT and DPO training from the latest `checkpoint-*` it finds in their output dirs (remove checkpoints to force a fresh run).
 
@@ -211,12 +202,12 @@ All runners:
 Generates `outputs/d_01` → `outputs/d_05` (and `outputs/pretty/*`).
 
 ```bash
-./runDatasetGeneration.sh --config config/defaults.json --model gpt-oss:120b
+./runDatasetGeneration.sh --config config/defaults.json --teacher-model gpt-oss:120b
 ```
 
 Flags:
 - `--config`: path to config JSON
-- `--model`: Ollama model id to use for schema/query generation
+- `--teacher-model`: Ollama model id to use for domain specs and dataset generation
 Resumes automatically if a dataset checkpoint file from a prior run is present.
 
 ### Fast dev config (tiny end-to-end runs)
@@ -224,7 +215,7 @@ Resumes automatically if a dataset checkpoint file from a prior run is present.
 Use `config/defaults.dev.json` for a ~30-line dataset and small training loop. Examples:
 
 - All stages: `./runAll.sh --config config/defaults.dev.json --with-training --with-evals --with-alignment`
-- Dataset only: `./runDatasetGeneration.sh --config config/defaults.dev.json --model gpt-oss:20b`
+- Dataset only: `./runDatasetGeneration.sh --config config/defaults.dev.json --teacher-model gpt-oss:20b`
 - Training: `./runTraining.sh --config config/defaults.dev.json`
 - Evals: `./runEvals.sh --config config/defaults.dev.json --teacher-model gpt-oss:20b`
 - Alignment: `./runAlignment.sh --config config/defaults.dev.json --teacher-model gpt-oss:20b`
@@ -275,7 +266,7 @@ Orchestrates the pipeline:
 ```
 
 Flags:
-- `--model`: teacher model override for dataset generation steps
+- `--teacher-model`: override the teacher for domain specs, dataset generation, evals, and alignment (required for those stages)
 - `--with-training`: run SFT training
 - `--with-evals`: run evaluation + report
 - `--with-alignment`: run teacher eval + DPO alignment
@@ -296,7 +287,7 @@ Purpose: ask the teacher to produce domain-specific fields + enum values + examp
 
 Key flags:
 - `--config`: uses `dataset_generation.*` defaults
-- `--model`: Ollama model id (teacher)
+- `--teacher-model`: Ollama model id (teacher)
 - `--prompts`: domain prompt file (`data/domain_prompts.jsonl`)
 - `--examples-per-schema`: how many example queries to ask for per schema
 - `--offline-fallback`: skip Ollama and generate deterministic stubs (testing only)
@@ -313,13 +304,13 @@ Key flags:
 
 #### `scripts/generate_dataset.py`
 
-Purpose: build `(schema, query) → AST` training rows by sampling fields/operators, validating against JSON Schema, and adding refusal outputs when a request is not satisfiable; then synthesize invalid negatives.
+Purpose: ask the teacher to produce validated `(query, AST)` pairs for each schema (using its example queries), validate them against JSON Schema, and write them as SFT targets.
 
 Key flags:
-- `--positives-per-schema`: how many validated rows to keep per schema
-- `--negative-ratio`: how many invalid negatives per positive
-- `--refusals-per-schema`: how many refusal samples to synthesize per schema
-- `--seed`: controls deterministic sampling/mutations
+- `--teacher-model`: required; Ollama model id to generate ASTs
+- `--samples-per-schema`: how many validated rows to keep per schema
+- `--teacher-retries` / `--teacher-retry-wait`: retry policy when parsing the teacher output fails
+- `--seed`: controls deterministic shuffling of example queries
 - Checkpointing: `--checkpoint-path` + `--checkpoint-every` for periodic saves; `--resume` continues from an on-disk checkpoint (enabled by default via config and the runner).
 
 #### `scripts/build_training_corpus.py`
@@ -361,7 +352,7 @@ Key flags (grouped):
 
 Purpose: generate student outputs, parse JSON, validate schema, and (optionally) compare to teacher outputs.
 
-Important: for alignment, you must run with a teacher model (`--teacher-model` or `.llmrc`/`LLM_MODEL`).
+Important: for alignment, you must run with a teacher model (`--teacher-model` or `LLM_MODEL` env).
 
 Key flags:
 - `--adapter`: LoRA checkpoint dir to evaluate
@@ -438,9 +429,10 @@ These settings control how much data you generate, how diverse it is, and where 
   - `final_schemas_out` (`outputs/d_02_final_schemas.jsonl`): fully built JSON Schemas (one per domain/schema_id).
   - `dataset_out` (`outputs/d_03_dataset.jsonl`): main dataset (schema_json, query, ast_json, is_valid, …).
   - `training_corpus_out` (`outputs/d_04_training_corpus.jsonl`): prompt/completion pairs for SFT.
-- `positives_per_schema` (`250`): validated “good” teacher samples per schema. This is the main knob for dataset size.
-- `negative_ratio` (`0.6`): approximate negatives per positive (so per schema you get ~`positives_per_schema * (1 + negative_ratio)` rows; with 250 and 0.6 → ~400 rows/schema).
-- `refusals_per_schema` (`20`): number of refusal samples per schema when a request is not satisfiable; each includes a reason and a suggested alternative.
+- Teacher-driven sample generation (in `generate_dataset.py`):
+  - `teacher_model` (required): Ollama id to call for AST generation.
+  - `samples_per_schema` (`60`): how many teacher-validated rows to keep per schema (dataset size knob).
+  - `teacher_retries` (`3`) / `teacher_retry_wait` (`1.0`): retry policy when parsing the teacher output fails.
 
 ### `training` (SFT / LoRA on Gemma 3 270M)
 

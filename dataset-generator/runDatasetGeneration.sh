@@ -11,22 +11,18 @@ log() {
   echo "[$(date '+%F %T')] $*"
 }
 
-MODEL_DEFAULT="gpt-oss:120b"
-if [ -f .llmrc ]; then
-  MODEL_DEFAULT="$(<.llmrc)"
-fi
-MODEL="${LLM_MODEL:-$MODEL_DEFAULT}"
+TEACHER_MODEL=""
 
 CONFIG_PATH="config/defaults.json"
 
 usage() {
-  echo "Usage: $0 [--model MODEL] [--config CONFIG_PATH]"
+  echo "Usage: $0 [--teacher-model MODEL] [--config CONFIG_PATH]"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="$2"
+    --teacher-model)
+      TEACHER_MODEL="$2"
       shift 2
       ;;
     --config)
@@ -76,11 +72,20 @@ emit("final_schemas_out", "outputs/d_02_final_schemas.jsonl")
 emit("dataset_out", "outputs/d_03_dataset.jsonl")
 emit("training_corpus_out", "outputs/d_04_training_corpus.jsonl")
 emit("dataset_checkpoint", "outputs/checkpoints/dataset_generation.json")
+emit("teacher_model", "")
 PY
 )
 
 eval "${env_exports}"
 log "Resolved dataset outputs: specs=${schema_specs_out}, schemas=${final_schemas_out}, dataset=${dataset_out}, corpus=${training_corpus_out}, checkpoint=${dataset_checkpoint}"
+if [[ -z "${TEACHER_MODEL}" ]]; then
+  TEACHER_MODEL="${teacher_model:-}"
+fi
+if [[ -z "${TEACHER_MODEL}" ]]; then
+  echo "Teacher model is required; set dataset_generation.teacher_model in config or pass --teacher-model."
+  exit 1
+fi
+log "Using teacher model: ${TEACHER_MODEL}"
 
 run_step() {
   local name="$1"
@@ -116,9 +121,9 @@ run_step() {
 run_step \
   "domain spec synthesis" \
   "[ -s \"${schema_specs_out}\" ]" \
-  scripts/generate_domain_specs.py \
+scripts/generate_domain_specs.py \
     --config "${CONFIG_PATH}" \
-    --model "${MODEL}"
+    --teacher-model "${TEACHER_MODEL}"
 
 run_step \
   "schema build" \
@@ -138,6 +143,7 @@ run_step \
   "${DATASET_SKIP_COND}" \
   scripts/generate_dataset.py \
     --config "${CONFIG_PATH}" \
+    --teacher-model "${TEACHER_MODEL}" \
     "${DATASET_RESUME_ARGS[@]}"
 
 run_step \

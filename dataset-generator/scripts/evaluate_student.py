@@ -192,7 +192,7 @@ def parse_args() -> argparse.Namespace:
         "--teacher-model",
         type=str,
         default=default_teacher,
-        help="Ollama model to compare against (teacher baseline). Defaults to model from .llmrc/LLM_MODEL.",
+        help="Ollama model to compare against (teacher baseline). Defaults to model from LLM_MODEL env or built-in default.",
     )
     parser.add_argument(
         "--log-every",
@@ -511,7 +511,7 @@ def main() -> None:
     if args.checkpoint_every < 1:
         raise SystemExit("--checkpoint-every must be >= 1 when checkpointing is enabled.")
     if not args.teacher_model:
-        raise SystemExit("Teacher model is required; set LLM_MODEL or .llmrc to an ollama model id.")
+        raise SystemExit("Teacher model is required; set LLM_MODEL or pass --teacher-model to an Ollama model id.")
 
     if args.out_dir:
         eval_results_path = args.out_dir / "evaluation_results.jsonl"
@@ -597,7 +597,7 @@ def main() -> None:
     if checkpoint_total and int(checkpoint_total) != total_samples:
         print(f"[warn] Checkpoint expected {checkpoint_total} samples; current dataset has {total_samples}.")
     if not args.teacher_model:
-        print("[eval] teacher disabled (no --teacher-model provided and no .llmrc found)")
+        print("[eval] teacher disabled (no --teacher-model provided and no LLM_MODEL env)")
     print(
         f"[eval] samples={len(dataset)} 4bit={args.load_in_4bit} "
         f"teacher={args.teacher_model or 'none'} log_every={args.log_every}"

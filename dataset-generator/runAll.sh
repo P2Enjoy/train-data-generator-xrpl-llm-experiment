@@ -19,11 +19,12 @@ WITH_TRAINING=0
 WITH_EVALS=0
 WITH_ALIGNMENT=0
 MODEL_ARG=()
+TEACHER_ARG=()
 CONFIG_PATH="config/defaults.json"
 
 usage() {
   cat <<EOF
-Usage: $0 [--model MODEL] [--with-training] [--with-evals] [--with-alignment]
+Usage: $0 [--teacher-model MODEL] [--with-training] [--with-evals] [--with-alignment]
 
 This wraps the per-stage runners:
   - runDatasetGeneration.sh (always)
@@ -31,15 +32,15 @@ This wraps the per-stage runners:
   - runEvals.sh (when --with-evals)
   - runAlignment.sh (when --with-alignment; implies teacher-evaluated pairs + DPO stage)
 
-Pass model override to the dataset generator with --model.
+Use --teacher-model to override the teacher used for domain specs, dataset generation, evals, and alignment.
 Use the individual runner scripts for finer control over arguments.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL_ARG=(--model "$2")
+    --teacher-model)
+      TEACHER_ARG=(--teacher-model "$2")
       shift 2
       ;;
     --config)
@@ -121,7 +122,7 @@ IFS=$'\n' read -r TRAIN_OUTPUT_DIR TRAIN_LATEST_CKPT ALIGN_OUTPUT_DIR ALIGN_LATE
 
 log "Logging to ${LOG_FILE}"
 log "Starting dataset generation with config=${CONFIG_PATH}"
-"$ROOT/runDatasetGeneration.sh" "${MODEL_ARG[@]}" --config "${CONFIG_PATH}"
+"$ROOT/runDatasetGeneration.sh" "${TEACHER_ARG[@]}" --config "${CONFIG_PATH}"
 
 if [[ $WITH_TRAINING -eq 1 ]]; then
   TRAIN_RESUME_ARGS=()
@@ -135,7 +136,7 @@ fi
 
 if [[ $WITH_EVALS -eq 1 ]]; then
   log "Starting evals stage"
-  "$ROOT/runEvals.sh" --config "${CONFIG_PATH}"
+  "$ROOT/runEvals.sh" --config "${CONFIG_PATH}" "${TEACHER_ARG[@]}"
 fi
 
 if [[ $WITH_ALIGNMENT -eq 1 ]]; then
@@ -145,7 +146,7 @@ if [[ $WITH_ALIGNMENT -eq 1 ]]; then
     ALIGN_RESUME_ARGS+=(--resume-from-checkpoint "${ALIGN_LATEST_CKPT}")
   fi
   log "Starting alignment stage"
-  "$ROOT/runAlignment.sh" --config "${CONFIG_PATH}" "${ALIGN_RESUME_ARGS[@]}"
+  "$ROOT/runAlignment.sh" --config "${CONFIG_PATH}" "${ALIGN_RESUME_ARGS[@]}" "${TEACHER_ARG[@]}"
 fi
 
 log "runAll complete."
