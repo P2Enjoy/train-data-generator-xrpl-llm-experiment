@@ -7,3 +7,5 @@ __pycache__/
 .vscode/
 
 unsloth_compiled_cache/
+
+nohup.out
