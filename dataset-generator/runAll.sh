@@ -65,18 +65,72 @@ while [[ $# -gt 0 ]]; do
     *)
       echo "Unknown option: $1"
       usage
-      exit 1
+    exit 1
       ;;
   esac
 done
+
+path_info="$(
+python3 - "$CONFIG_PATH" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+defaults = {}
+if cfg_path.exists():
+    try:
+        defaults = json.loads(cfg_path.read_text())
+    except Exception:
+        defaults = {}
+
+training = defaults.get("training", {}) or {}
+alignment = defaults.get("alignment", {}) or {}
+
+def latest_checkpoint(base: Path) -> str:
+    if not base.exists():
+        return ""
+    best = None
+    best_step = -1
+    for path in base.iterdir():
+        if not path.is_dir():
+            continue
+        name = path.name
+        if not name.startswith("checkpoint-"):
+            continue
+        try:
+            step = int(name.split("-", 1)[1])
+        except Exception:
+            continue
+        if step > best_step:
+            best_step = step
+            best = path
+    return str(best) if best else ""
+
+train_dir = Path(training.get("output_dir", "outputs/student_runs/gemma3-270m"))
+align_dir = Path(alignment.get("output_dir", "outputs/student_runs/gemma3-270m-dpo"))
+
+print(train_dir)
+print(latest_checkpoint(train_dir))
+print(align_dir)
+print(latest_checkpoint(align_dir))
+PY
+)"
+IFS=$'\n' read -r TRAIN_OUTPUT_DIR TRAIN_LATEST_CKPT ALIGN_OUTPUT_DIR ALIGN_LATEST_CKPT <<< "${path_info}"
 
 log "Logging to ${LOG_FILE}"
 log "Starting dataset generation with config=${CONFIG_PATH}"
 "$ROOT/runDatasetGeneration.sh" "${MODEL_ARG[@]}" --config "${CONFIG_PATH}"
 
 if [[ $WITH_TRAINING -eq 1 ]]; then
+  TRAIN_RESUME_ARGS=()
+  if [[ -n "${TRAIN_LATEST_CKPT}" && -d "${TRAIN_LATEST_CKPT}" ]]; then
+    log "Auto-resuming training from ${TRAIN_LATEST_CKPT}"
+    TRAIN_RESUME_ARGS+=(--resume-from-checkpoint "${TRAIN_LATEST_CKPT}")
+  fi
   log "Starting training stage"
-  "$ROOT/runTraining.sh" --config "${CONFIG_PATH}"
+  "$ROOT/runTraining.sh" --config "${CONFIG_PATH}" "${TRAIN_RESUME_ARGS[@]}"
 fi
 
 if [[ $WITH_EVALS -eq 1 ]]; then
@@ -85,8 +139,13 @@ if [[ $WITH_EVALS -eq 1 ]]; then
 fi
 
 if [[ $WITH_ALIGNMENT -eq 1 ]]; then
+  ALIGN_RESUME_ARGS=()
+  if [[ -n "${ALIGN_LATEST_CKPT}" && -d "${ALIGN_LATEST_CKPT}" ]]; then
+    log "Auto-resuming alignment from ${ALIGN_LATEST_CKPT}"
+    ALIGN_RESUME_ARGS+=(--resume-from-checkpoint "${ALIGN_LATEST_CKPT}")
+  fi
   log "Starting alignment stage"
-  "$ROOT/runAlignment.sh" --config "${CONFIG_PATH}"
+  "$ROOT/runAlignment.sh" --config "${CONFIG_PATH}" "${ALIGN_RESUME_ARGS[@]}"
 fi
 
 log "runAll complete."

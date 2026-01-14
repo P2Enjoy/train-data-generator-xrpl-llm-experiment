@@ -59,6 +59,7 @@ Notes:
 - `--with-alignment` requires the **Ollama teacher** to be available (alignment is built from teacher verdicts).
 - If you want to override the teacher model for dataset generation, use `./runAll.sh --model <ollama_id> ...`.
 - Defaults come from `config/defaults.json` unless overridden with CLI flags.
+- `runAll.sh` auto-resumes SFT and DPO training from the latest `checkpoint-*` it finds in their output dirs (remove checkpoints to force a fresh run).
 
 ---
 
